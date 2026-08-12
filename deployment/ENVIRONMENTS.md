@@ -90,7 +90,18 @@ Read-only operations:
 
 The user-managed tunnel should route `monitor.jefferyhaynes.net` to `http://localhost:3000` on the CPQ host during Sprint 0. Grafana is configured with `https://monitor.jefferyhaynes.net` as its public root URL. Protect the hostname with Cloudflare Access before public use. Do not store tunnel tokens, credentials, account IDs, or Access policy secrets in this repository.
 
-Sprint 1 will replace Grafana as the root destination with the enterprise monitoring portal. Grafana will then become an internal linked tool or receive a separately reviewed hostname.
+Sprint 1.1 will replace Grafana as the root destination with the enterprise monitoring portal. The planned portal binding is `127.0.0.1:3100`; Grafana remains available internally on `127.0.0.1:3000` and does not receive a public hostname without a separate review.
+
+The planned cutover sequence is intentionally reversible:
+
+1. Deploy the portal container without changing Cloudflare.
+2. Verify `/healthz`, all primary routes, fixture disclosure, resource limits, and existing Grafana/monitoring health over loopback.
+3. Confirm that the Cloudflare Access policy is active for `monitor.jefferyhaynes.net`.
+4. Change the user-managed tunnel origin from `http://localhost:3000` to `http://localhost:3100`.
+5. Verify public TLS, Access enforcement, and portal navigation.
+6. If verification fails, restore the tunnel origin to `http://localhost:3000`; this tunnel rollback is independent of container rollback.
+
+These are planned Sprint 1.1 steps, not current deployment commands. The implementation must add automated verification and a reviewed runbook before the tunnel is changed.
 
 The public-path Gatus process runs on the same host. It validates DNS, TLS, reverse-proxy, and public URL behavior, but it cannot detect loss of the server, LAN, ISP, host Docker daemon, or host power independently.
 

@@ -18,7 +18,7 @@
 | Milestone | Sprints | Reviewable outcome |
 | --- | --- | --- |
 | Monitoring foundation | 0 | Catalog, telemetry stack, probes, and guarded deployment automation |
-| Enterprise monitoring MVP | 1–3 | Application shell, live deployment inventory, and traffic/performance dashboards |
+| Enterprise monitoring MVP | 1–3 | Application shell, lab portal deployment, live deployment inventory, and traffic/performance dashboards |
 | Operations workspace | 4–6 | Infrastructure topology, incident operations, and correlated logs/events |
 | Enterprise controls | 7–8 | SSO/RBAC and safe synthetic business journeys |
 | Cloud-ready release | 9 | Reproducible cloud deployment, backups, upgrades, and operational certification |
@@ -29,6 +29,7 @@
 | ---: | --- | --- | --- |
 | 0 | Foundation and delivery guardrails | Implemented locally; not deployed | Render the stack, validate probes, and show deployment plans without mutating a target |
 | 1 | Enterprise application shell | Implemented locally; ready for review | Navigate the approved enterprise shell using fixture data |
+| 1.1 | Portal packaging and lab deployment | Planned | Deploy the fixture portal beside the monitoring stack, verify it locally, and perform a reversible Cloudflare cutover |
 | 2 | Live deployment inventory | Planned | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
 | 3 | Traffic and performance | Planned | Inspect real request rate, errors, saturation, and latency graphs |
 | 4 | Infrastructure topology | Planned | Drill from an environment into workloads, nodes, and dependencies |
@@ -116,7 +117,83 @@ Turn the approved mockup direction into a responsive enterprise web application 
 
 - Live Prometheus, Gatus, Kubernetes, or log queries.
 - Authentication or role enforcement.
-- Deployment to the lab.
+- Production packaging and deployment to the lab; this is explicitly owned by Sprint 1.1.
+
+## Sprint 1.1: Portal packaging and lab deployment
+
+### Status
+
+Planned. This increment begins only after the Sprint 1 shell is reviewed and accepted. No deployment is implied by the plan.
+
+### Objective
+
+Package the fixture-backed enterprise portal as a hardened container, add it to the existing CPQ-server Docker Compose profile, and provide a guarded, reversible transition of `monitor.jefferyhaynes.net` from Grafana to the portal.
+
+### Target topology
+
+| Component | Container port | Host binding | Public exposure after cutover |
+| --- | ---: | --- | --- |
+| Enterprise portal | 8080 | `127.0.0.1:3100` | `monitor.jefferyhaynes.net` through the user-managed Cloudflare tunnel and Access policy |
+| Grafana | 3000 | `127.0.0.1:3000` | No longer the root destination; remains internal until a separate hostname is reviewed |
+| Prometheus and other operator tools | Existing ports | Loopback | No change |
+
+The portal remains fixture-backed in this increment. Its global fixture banner must remain visible after deployment.
+
+### Deliverables
+
+- Multi-stage portal Dockerfile that builds the tested Vite bundle and serves only production assets from a pinned, unprivileged web-server image.
+- Web-server configuration with SPA fallback, `/healthz`, compression, immutable caching for hashed assets, no-cache handling for `index.html`, and reviewed security headers.
+- `portal` service in the primary lab Compose stack with a read-only root filesystem, dropped capabilities, `no-new-privileges`, bounded CPU/memory, tmpfs runtime paths, and loopback-only port `3100`.
+- Existing guarded lab deployment script extended to synchronize the portal build context and support `plan`, `preflight`, `deploy`, `status`, `verify`, and `logs` without weakening exact-confirmation behavior.
+- Automated contract tests for the Docker build, Compose service, port isolation, health check, security controls, remote synchronization exclusions, and deployment-script command surface.
+- Cloudflare cutover and rollback runbook. Tunnel credentials, account identifiers, and Access policies stay outside Git and remain user-managed.
+- Image/build provenance recorded from the Git commit so an operator can identify and reproduce the deployed portal.
+
+### Work items
+
+- Write failing infrastructure-contract tests before adding the Dockerfile, web-server configuration, Compose service, and script changes.
+- Build the portal image locally and on the deployment path; verify that development dependencies and source files are absent from the runtime image.
+- Serve `/`, every primary SPA route, static assets, and `/healthz` directly from the container.
+- Add remote preflight checks for Docker/Compose capacity, port `3100` availability, required source files, and the existing monitoring runtime configuration.
+- Extend verification to check container health, the loopback portal URL, fixture disclosure, representative deep-link routing, existing Grafana health on `3000`, and all monitoring containers.
+- Document the explicit Cloudflare sequence: deploy and verify on `3100`, change the tunnel origin, verify public TLS/Access/application behavior, then retain the old Grafana origin as the immediate rollback value.
+- Document container and tunnel rollback separately. Application rollback restores the prior portal image; tunnel rollback points `monitor.jefferyhaynes.net` back to `http://localhost:3000`.
+
+### Acceptance criteria
+
+- `docker compose config --quiet` and the repository's standalone-Compose compatibility checks pass.
+- A clean production image builds reproducibly from the reviewed commit and starts healthy without root privileges.
+- `curl -fsS http://127.0.0.1:3100/healthz` succeeds on the CPQ server.
+- Direct requests to `/`, `/deployments`, `/infrastructure`, `/performance`, `/incidents`, and `/settings` return the portal rather than a web-server 404.
+- The deployed UI visibly states that data is fixture-backed and does not imply live monitoring.
+- Grafana remains healthy on loopback port `3000`; Prometheus, Gatus, exporters, CPQ, OAuth, Mailpit, and ERPNet are not interrupted by the portal deployment.
+- The portal stays within its reviewed CPU and memory limits during startup and representative navigation.
+- Deployment still requires `--confirm-deploy lab-docker`; plan, preflight, status, verify, and logs remain non-mutating.
+- Remote synchronization excludes `.env`, secrets, runtime databases, coverage output, `node_modules`, and local build artifacts.
+- The Cloudflare cutover occurs only after local verification and an explicit operator decision. Public verification confirms TLS, Access protection, fixture disclosure, and primary-route navigation.
+- Both container rollback and tunnel-origin rollback are documented and exercised in a non-destructive review.
+
+### Failure modes to test
+
+- Port `3100` is occupied or unavailable.
+- The portal image fails to build, start, or become healthy within the bounded timeout.
+- A deep link returns 404 because SPA fallback is missing.
+- The portal becomes public before Cloudflare Access is active.
+- The tunnel is changed before local verification completes.
+- Grafana is accidentally stopped, exposed publicly, or overwritten by the portal service.
+- A partial deployment leaves an unhealthy new container while the existing monitoring stack is still running.
+- Rollback references a missing image or an undocumented prior tunnel origin.
+
+### Review gate
+
+Approve the portal port, resource limits, base-image pin, web security headers, Cloudflare Access policy, Grafana disposition, and rollback procedure before running the mutating deployment command or changing the tunnel origin.
+
+### Non-goals
+
+- Live monitoring data or a server API; Sprint 2 owns those integrations.
+- Portal authentication or role enforcement; Cloudflare Access is the temporary lab boundary until Sprint 7.
+- A public Grafana hostname.
+- Kubernetes deployment, registry promotion, multi-host availability, or independent failure domains; Sprint 9 owns cloud operational hardening.
 
 ## Sprint 2: Live deployment inventory
 

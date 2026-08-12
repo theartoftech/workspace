@@ -2,7 +2,7 @@
 
 This standalone repository is the first reviewable monitoring slice for the CPQ development lab. Its primary upskilling profile is a single Docker Compose stack on the CPQ server. It defines the service catalog, one direct CPQ Prometheus scrape, host/container telemetry, internal checks, and a same-host public-path simulation. The Kubernetes Helm stack remains the future cloud path. Nothing deploys automatically.
 
-Development is organized as reviewable two-week increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 0 covers this monitoring foundation and deployment guardrails; Sprint 1 begins the enterprise web application shell.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 0 covers the monitoring foundation and deployment guardrails; Sprint 1 implements the enterprise web application shell; Sprint 1.1 explicitly owns its container packaging, guarded lab deployment, Cloudflare cutover, verification, and rollback.
 
 ## Foundation scope
 
