@@ -31,6 +31,32 @@ The enterprise portal, SSO for monitoring tools, safe transaction journeys, log 
 - `probes/internal` — Gatus node intended to run inside the lab network.
 - `probes/external` — Gatus node intended to run on an independent public host.
 - `tests` — catalog, drift, security-default, and infrastructure contract tests.
+- `web/src` — Sprint 1 enterprise monitoring shell, typed fixture provider, reusable components, and UI tests.
+- `documentation/adr` — architecture decisions for review before later live-data integration.
+
+## Review the Sprint 1 enterprise shell
+
+Sprint 1 is a local, fixture-backed review build. It does not query or modify Prometheus, Gatus, Grafana, Kubernetes, Docker, or the CPQ server.
+
+```sh
+npm install
+npm run dev
+```
+
+Open the local URL printed by Vite. The persistent amber banner identifies every value as fixture data. Navigate with the left rail or press `/` to open command search.
+
+Run the complete frontend quality gate with:
+
+```sh
+npm test
+npm run test:coverage
+npm run test:a11y
+npm run typecheck
+npm run lint
+npm run build
+```
+
+The approved route set is Overview, Deployments, Infrastructure, Performance, Incidents, and Settings. Live provider adapters, authentication, and deployment of this shell remain later-sprint work.
 
 ## Acceptance criteria
 

@@ -28,7 +28,7 @@
 | Sprint | Name | Status | Demonstration at review |
 | ---: | --- | --- | --- |
 | 0 | Foundation and delivery guardrails | Implemented locally; not deployed | Render the stack, validate probes, and show deployment plans without mutating a target |
-| 1 | Enterprise application shell | Planned | Navigate the approved enterprise shell using fixture data |
+| 1 | Enterprise application shell | Implemented locally; ready for review | Navigate the approved enterprise shell using fixture data |
 | 2 | Live deployment inventory | Planned | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
 | 3 | Traffic and performance | Planned | Inspect real request rate, errors, saturation, and latency graphs |
 | 4 | Infrastructure topology | Planned | Drill from an environment into workloads, nodes, and dependencies |
@@ -77,6 +77,10 @@ Establish a dependable monitoring substrate and a guarded, repeatable path for r
 Approve or revise retention, resource limits, the cAdvisor host-access exception, secret ownership, Cloudflare Access policy, and loopback exposure rules before executing any deploy command. Kubernetes storage remains a separate cloud-path review.
 
 ## Sprint 1: Enterprise application shell
+
+### Status
+
+Implemented and tested locally. Fixture mode is enabled; no monitoring backend or lab deployment was changed.
 
 ### Objective
 

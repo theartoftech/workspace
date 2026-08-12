@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 .coverage
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
 .env
 probes/*/data/*
 !probes/*/data/.gitkeep
