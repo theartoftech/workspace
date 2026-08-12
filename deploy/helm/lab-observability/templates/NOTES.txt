@@ -1,0 +1,10 @@
+The lab monitoring foundation is installed.
+
+Prometheus scrapes the CPQ demo Service in namespace "default" when it has:
+  app: application
+  runtime: spring-boot-primary
+
+The Service must expose a named port "http" and metrics at:
+  /api/actuator/prometheus
+
+Grafana and Prometheus ingress remain disabled in this foundation slice.

@@ -1,0 +1,21 @@
+services:
+  gatus:
+    image: ghcr.io/twin/gatus:v5.34.0
+    restart: unless-stopped
+    user: "${GATUS_UID:-1000}:${GATUS_GID:-1000}"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "${GATUS_LISTEN_ADDRESS:-127.0.0.1}:8080:8080"
+    env_file:
+      - "${GATUS_ENV_FILE:-.env}"
+    environment:
+      GATUS_CONFIG_PATH: /config/config.yaml
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./data:/data
+    tmpfs:
+      - /tmp:size=16m,mode=1777

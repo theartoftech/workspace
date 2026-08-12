@@ -1,0 +1,55 @@
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - prometheus:9090
+
+  - job_name: cpq-demo
+    metrics_path: /api/actuator/prometheus
+    static_configs:
+      - targets:
+          - host.docker.internal:8080
+        labels:
+          service: cpq-demo
+          environment: demo
+          source: direct-application
+
+  - job_name: node-exporter
+    static_configs:
+      - targets:
+          - node-exporter:9100
+        labels:
+          service: cpq-lab-host
+          environment: lab
+
+  - job_name: cadvisor
+    static_configs:
+      - targets:
+          - cadvisor:8080
+        labels:
+          service: docker-containers
+          environment: lab
+
+  - job_name: blackbox-exporter
+    static_configs:
+      - targets:
+          - blackbox-exporter:9115
+
+  - job_name: gatus-internal
+    static_configs:
+      - targets:
+          - gatus-internal:8080
+        labels:
+          vantage: internal
+
+  - job_name: gatus-public-path
+    static_configs:
+      - targets:
+          - gatus-public-path:8080
+        labels:
+          vantage: public-path-simulation

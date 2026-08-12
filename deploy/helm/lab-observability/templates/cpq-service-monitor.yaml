@@ -1,0 +1,23 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cpq-demo
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: cpq-demo
+    app.kubernetes.io/part-of: lab-observability
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      app: application
+      runtime: spring-boot-primary
+  endpoints:
+    - port: http
+      scheme: http
+      path: /api/actuator/prometheus
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: false

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: lab-observability
+description: Reviewable monitoring foundation for the CPQ development lab
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+dependencies:
+  - name: kube-prometheus-stack
+    version: 87.21.0
+    repository: https://prometheus-community.github.io/helm-charts
+  - name: prometheus-blackbox-exporter
+    version: 11.17.2
+    repository: https://prometheus-community.github.io/helm-charts

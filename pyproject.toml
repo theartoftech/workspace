@@ -1,0 +1,9 @@
+[project]
+name = "lab-observability"
+version = "0.1.0"
+description = "Development lab monitoring foundation"
+requires-python = ">=3.11"
+
+[tool.pyright]
+include = ["src", "scripts", "tests"]
+typeCheckingMode = "strict"

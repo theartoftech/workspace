@@ -1,0 +1,35 @@
+metrics: true
+concurrency: 2
+
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+ui:
+  title: Development Lab — Public Path Simulation
+  header: Public URL checks originating from the same lab host; this is not an independent external vantage point
+  default-sort-by: group
+
+endpoints:
+  - name: cpq-demo-ready-external
+    group: cpq-demo
+    url: "https://demo.jefferyhaynes.net/api/health/ready"
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].status == UP"
+      - "[CERTIFICATE_EXPIRATION] > 168h"
+      - "[RESPONSE_TIME] < 3000"
+
+  - name: erpnet-ping-external
+    group: erpnet
+    url: "https://erp.jefferyhaynes.net/api/method/ping"
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - "[STATUS] == 200"
+      - "[CERTIFICATE_EXPIRATION] > 168h"
+      - "[RESPONSE_TIME] < 3000"
