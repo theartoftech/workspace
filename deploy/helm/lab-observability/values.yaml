@@ -1,0 +1,120 @@
+kube-prometheus-stack:
+  fullnameOverride: lab-monitoring
+
+  defaultRules:
+    create: true
+
+  # k3s does not expose these control-plane endpoints like a stock kubeadm cluster.
+  kubeControllerManager:
+    enabled: false
+  kubeEtcd:
+    enabled: false
+  kubeProxy:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+
+  grafana:
+    admin:
+      existingSecret: lab-observability-grafana-admin
+      userKey: admin-user
+      passwordKey: admin-password
+    ingress:
+      enabled: false
+    persistence:
+      enabled: true
+      storageClassName: local-path
+      accessModes:
+        - ReadWriteOnce
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  alertmanager:
+    alertmanagerSpec:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+      storage:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: local-path
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 2Gi
+
+  prometheusOperator:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  prometheus:
+    ingress:
+      enabled: false
+    prometheusSpec:
+      retention: 30d
+      retentionSize: 25GB
+      resources:
+        requests:
+          cpu: 300m
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+      # Select all ServiceMonitor resources in the monitoring namespace,
+      # including the CPQ monitor defined by this umbrella chart.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelector: {}
+      serviceMonitorNamespaceSelector:
+        matchNames:
+          - monitoring
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: local-path
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 30Gi
+
+prometheus-blackbox-exporter:
+  fullnameOverride: lab-blackbox-exporter
+  config:
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 10s
+        http:
+          method: GET
+          preferred_ip_protocol: ip4
+          follow_redirects: true
+      tcp_connect:
+        prober: tcp
+        timeout: 5s
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  serviceMonitor:
+    enabled: true
+    selfMonitor:
+      enabled: true

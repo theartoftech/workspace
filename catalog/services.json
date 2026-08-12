@@ -1,0 +1,141 @@
+{
+  "catalogVersion": 1,
+  "services": [
+    {
+      "id": "cpq-demo",
+      "displayName": "CPQ Demo",
+      "kind": "application",
+      "environment": "demo",
+      "owner": "Development Lab",
+      "criticality": "critical",
+      "probes": [
+        {
+          "id": "cpq-demo-ready-internal",
+          "displayName": "CPQ Demo readiness (internal)",
+          "group": "cpq-demo",
+          "url": "http://192.168.86.246:8080/api/health/ready",
+          "vantagePoints": ["internal"],
+          "intervalSeconds": 30,
+          "timeoutSeconds": 5,
+          "expectedStatus": 200,
+          "bodyCondition": "[BODY].status == UP"
+        },
+        {
+          "id": "cpq-demo-ready-external",
+          "displayName": "CPQ Demo readiness (external)",
+          "group": "cpq-demo",
+          "url": "https://demo.jefferyhaynes.net/api/health/ready",
+          "vantagePoints": ["external"],
+          "intervalSeconds": 60,
+          "timeoutSeconds": 10,
+          "expectedStatus": 200,
+          "bodyCondition": "[BODY].status == UP",
+          "certificateMinimumHours": 168
+        }
+      ]
+    },
+    {
+      "id": "cpq-test",
+      "displayName": "CPQ Test",
+      "kind": "application",
+      "environment": "test",
+      "owner": "Development Lab",
+      "criticality": "high",
+      "probes": [
+        {
+          "id": "cpq-test-ready-internal",
+          "displayName": "CPQ Test readiness (internal)",
+          "group": "cpq-test",
+          "url": "http://192.168.86.246:8082/api/health/ready",
+          "vantagePoints": ["internal"],
+          "intervalSeconds": 30,
+          "timeoutSeconds": 5,
+          "expectedStatus": 200,
+          "bodyCondition": "[BODY].status == UP"
+        }
+      ]
+    },
+    {
+      "id": "oauth",
+      "displayName": "OAuth / Keycloak",
+      "kind": "identity",
+      "environment": "shared",
+      "owner": "Development Lab",
+      "criticality": "critical",
+      "probes": [
+        {
+          "id": "oauth-demo-discovery-internal",
+          "displayName": "OAuth demo discovery",
+          "group": "oauth",
+          "url": "http://192.168.86.246:8081/realms/master/.well-known/openid-configuration",
+          "vantagePoints": ["internal"],
+          "intervalSeconds": 60,
+          "timeoutSeconds": 5,
+          "expectedStatus": 200
+        },
+        {
+          "id": "oauth-test-discovery-internal",
+          "displayName": "OAuth test discovery",
+          "group": "oauth",
+          "url": "http://192.168.86.246:8083/realms/master/.well-known/openid-configuration",
+          "vantagePoints": ["internal"],
+          "intervalSeconds": 60,
+          "timeoutSeconds": 5,
+          "expectedStatus": 200
+        }
+      ]
+    },
+    {
+      "id": "mailpit",
+      "displayName": "Mailpit",
+      "kind": "mail",
+      "environment": "shared",
+      "owner": "Development Lab",
+      "criticality": "medium",
+      "probes": [
+        {
+          "id": "mailpit-api-internal",
+          "displayName": "Mailpit API",
+          "group": "mailpit",
+          "url": "http://192.168.86.246:8025/api/v1/info",
+          "vantagePoints": ["internal"],
+          "intervalSeconds": 60,
+          "timeoutSeconds": 5,
+          "expectedStatus": 200
+        }
+      ]
+    },
+    {
+      "id": "erpnet",
+      "displayName": "ERPNet / ERPNext",
+      "kind": "erp",
+      "environment": "demo",
+      "owner": "Development Lab",
+      "criticality": "high",
+      "probes": [
+        {
+          "id": "erpnet-ping-internal",
+          "displayName": "ERPNet ping (internal vantage)",
+          "group": "erpnet",
+          "url": "https://erp.jefferyhaynes.net/api/method/ping",
+          "vantagePoints": ["internal"],
+          "intervalSeconds": 60,
+          "timeoutSeconds": 10,
+          "expectedStatus": 200,
+          "certificateMinimumHours": 168
+        },
+        {
+          "id": "erpnet-ping-external",
+          "displayName": "ERPNet ping (external vantage)",
+          "group": "erpnet",
+          "url": "https://erp.jefferyhaynes.net/api/method/ping",
+          "vantagePoints": ["external"],
+          "intervalSeconds": 60,
+          "timeoutSeconds": 10,
+          "expectedStatus": 200,
+          "certificateMinimumHours": 168
+        }
+      ]
+    }
+  ]
+}

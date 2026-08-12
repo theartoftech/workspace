@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.coverage
+.env
+probes/*/data/*
+!probes/*/data/.gitkeep
+deploy/helm/lab-observability/charts/*.tgz
+deploy/compose/lab-observability/data/*
+!deploy/compose/lab-observability/data/.gitkeep
+deploy/compose/lab-observability/secrets/*
+!deploy/compose/lab-observability/secrets/.gitkeep

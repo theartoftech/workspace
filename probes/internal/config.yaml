@@ -1,0 +1,75 @@
+metrics: true
+concurrency: 3
+
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+ui:
+  title: Development Lab — Internal Status
+  header: Internal service reachability from the lab network
+  default-sort-by: group
+
+endpoints:
+  - name: cpq-demo-ready-internal
+    group: cpq-demo
+    url: "http://192.168.86.246:8080/api/health/ready"
+    interval: 30s
+    client:
+      timeout: 5s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].status == UP"
+      - "[RESPONSE_TIME] < 2000"
+
+  - name: cpq-test-ready-internal
+    group: cpq-test
+    url: "http://192.168.86.246:8082/api/health/ready"
+    interval: 30s
+    client:
+      timeout: 5s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].status == UP"
+      - "[RESPONSE_TIME] < 2000"
+
+  - name: oauth-demo-discovery-internal
+    group: oauth
+    url: "http://192.168.86.246:8081/realms/master/.well-known/openid-configuration"
+    interval: 60s
+    client:
+      timeout: 5s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 2000"
+
+  - name: oauth-test-discovery-internal
+    group: oauth
+    url: "http://192.168.86.246:8083/realms/master/.well-known/openid-configuration"
+    interval: 60s
+    client:
+      timeout: 5s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 2000"
+
+  - name: mailpit-api-internal
+    group: mailpit
+    url: "http://192.168.86.246:8025/api/v1/info"
+    interval: 60s
+    client:
+      timeout: 5s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 2000"
+
+  - name: erpnet-ping-internal
+    group: erpnet
+    url: "https://erp.jefferyhaynes.net/api/method/ping"
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - "[STATUS] == 200"
+      - "[CERTIFICATE_EXPIRATION] > 168h"
+      - "[RESPONSE_TIME] < 3000"

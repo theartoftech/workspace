@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://monitoring.jefferyhaynes.net/schemas/service-catalog-v1.json",
+  "title": "Development Lab monitoring service catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["catalogVersion", "services"],
+  "properties": {
+    "catalogVersion": { "const": 1 },
+    "services": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/service" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "kind", "environment", "owner", "criticality", "probes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "displayName": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["application", "identity", "mail", "erp"] },
+        "environment": { "enum": ["demo", "test", "shared"] },
+        "owner": { "type": "string", "minLength": 1 },
+        "criticality": { "enum": ["critical", "high", "medium"] },
+        "probes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/probe" }
+        }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "group", "url", "vantagePoints", "intervalSeconds", "timeoutSeconds", "expectedStatus"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "displayName": { "type": "string", "minLength": 1 },
+        "group": { "$ref": "#/$defs/identifier" },
+        "url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+        "vantagePoints": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["internal", "external"] }
+        },
+        "intervalSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "expectedStatus": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "bodyCondition": { "type": "string", "minLength": 1 },
+        "certificateMinimumHours": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}
