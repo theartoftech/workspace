@@ -15,6 +15,7 @@ SSH_USER="${USER:-}"
 REMOTE_DIR=""
 LOG_TAIL=200
 COMPOSE_COMMAND=()
+PORTAL_BUILD_REVISION="${PORTAL_BUILD_REVISION:-}"
 
 usage() {
     cat <<'USAGE'
@@ -23,7 +24,7 @@ Usage: deployment/scripts/deploy-lab-docker.sh <command> [options]
 Commands:
   plan        Validate the single-host Compose model with example settings; no containers start.
   preflight   Validate real settings, secret files, Docker, and Compose without starting containers.
-  deploy      Pull and start the lab monitoring stack. Requires exact confirmation.
+  deploy      Build the portal, pull pinned images, and start the lab stack. Requires exact confirmation.
   status      Show container state without changing the deployment.
   verify      Verify containers and local HTTP readiness endpoints.
   logs        Show recent stack logs without following them.
@@ -154,6 +155,32 @@ validate_remote_dir() {
     [[ "$directory" != *".."* ]] || fail "--remote-dir must not contain '..'."
 }
 
+sha256_file() {
+    local file="$1"
+    local digest
+    if command -v sha256sum >/dev/null 2>&1; then
+        digest="$(sha256sum "$file" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        digest="$(shasum -a 256 "$file" | awk '{print $1}')"
+    else
+        fail "SHA-256 tooling is required as either 'sha256sum' or 'shasum'."
+    fi
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || fail "Unable to derive a valid SHA-256 digest for the candidate archive."
+    printf '%s' "$digest"
+}
+
+validate_direct_local_portal_source() {
+    [[ "$COMMAND" == "deploy" ]] || return 0
+    [[ "${MONITORING_REMOTE_EXEC:-0}" != "1" ]] || return 0
+    require_command git
+    git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+        fail "Direct local portal deployment must run from a Git worktree."
+    local changes
+    changes="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=normal)"
+    [[ -z "$changes" ]] || \
+        fail "Direct local deploy requires a clean Git worktree. Use --host to package an uncommitted candidate with content-derived provenance."
+}
+
 sync_and_run_remote() {
     require_command ssh
     require_command tar
@@ -168,6 +195,7 @@ sync_and_run_remote() {
     local remote_target="${SSH_USER}@${SSH_HOST}"
     local release_dir="${REMOTE_DIR}/release"
     local runtime_dir="${REMOTE_DIR}/runtime/lab-docker"
+    local portal_revision=""
     local release_quoted
     release_quoted="$(printf '%q' "$release_dir")"
 
@@ -178,14 +206,42 @@ sync_and_run_remote() {
         # Runtime .env, secrets, and data are never synchronized from the workstation.
         COPYFILE_DISABLE=1 tar \
             --exclude='._*' \
+            --exclude='.git' \
+            --exclude='.env' \
+            --exclude='node_modules' \
+            --exclude='dist' \
+            --exclude='coverage' \
+            --exclude='runtime' \
+            --exclude='*/secrets' \
+            --exclude='*/secrets/*' \
             --exclude='deploy/compose/lab-observability/data' \
-            -czf "$archive" \
+            -cf "$archive" \
+            .dockerignore \
+            package.json \
+            package-lock.json \
+            index.html \
+            vite.config.ts \
+            tsconfig.json \
+            tsconfig.app.json \
+            tsconfig.node.json \
+            web \
+            deploy/portal \
             deployment/scripts/deploy-lab-docker.sh \
+            deployment/PORTAL_ROLLBACK.md \
             deploy/compose/lab-observability \
             probes/internal/config.yaml
+        local archive_digest
+        archive_digest="$(sha256_file "$archive")"
+        portal_revision="candidate-${archive_digest}"
+        local remote_archive="${REMOTE_DIR}/.candidate-${archive_digest}.tar"
+        local remote_archive_quoted
+        remote_archive_quoted="$(printf '%q' "$remote_archive")"
+        local remote_root_quoted
+        remote_root_quoted="$(printf '%q' "$REMOTE_DIR")"
+        echo "Candidate revision: ${portal_revision}"
         echo "Synchronizing credential-free lab monitoring sources to ${remote_target}:${release_dir}..."
         ssh "$remote_target" \
-            "rm -rf -- ${release_quoted} && mkdir -p -- ${release_quoted} && tar -xzf - -C ${release_quoted}" \
+            "mkdir -p -- ${remote_root_quoted} && cat > ${remote_archive_quoted} && echo '${archive_digest}  ${remote_archive}' | sha256sum --check --status && rm -rf -- ${release_quoted} && mkdir -p -- ${release_quoted} && tar -xf ${remote_archive_quoted} -C ${release_quoted} && rm -f -- ${remote_archive_quoted}" \
             < "$archive"
     fi
 
@@ -194,7 +250,11 @@ sync_and_run_remote() {
         remote_arguments+=(--confirm-deploy "$CONFIRM_DEPLOY")
     fi
     local remote_command
-    remote_command="cd ${release_quoted} && chmod +x deployment/scripts/deploy-lab-docker.sh && MONITORING_REMOTE_EXEC=1 deployment/scripts/deploy-lab-docker.sh $(shell_join "${remote_arguments[@]}")"
+    local revision_environment=""
+    if [[ -n "$portal_revision" ]]; then
+        revision_environment="PORTAL_BUILD_REVISION=$(printf '%q' "$portal_revision") "
+    fi
+    remote_command="cd ${release_quoted} && chmod +x deployment/scripts/deploy-lab-docker.sh && ${revision_environment}MONITORING_REMOTE_EXEC=1 deployment/scripts/deploy-lab-docker.sh $(shell_join "${remote_arguments[@]}")"
     echo "Running '$COMMAND' on $remote_target..."
     ssh -tt "$remote_target" "bash -lc $(printf '%q' "$remote_command")"
 }
@@ -222,6 +282,28 @@ fi
 if [[ "$ENV_FILE" != /* ]]; then
     ENV_FILE="$ROOT_DIR/$ENV_FILE"
 fi
+
+initialize_portal_revision() {
+    local revision_file="$RUNTIME_DIR/portal-revision"
+    if [[ -z "$PORTAL_BUILD_REVISION" && -f "$revision_file" ]]; then
+        PORTAL_BUILD_REVISION="$(tr -d '[:space:]' < "$revision_file")"
+    fi
+    if [[ -z "$PORTAL_BUILD_REVISION" ]]; then
+        PORTAL_BUILD_REVISION="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD 2>/dev/null || true)"
+    fi
+    if [[ -z "$PORTAL_BUILD_REVISION" && "$COMMAND" == "plan" ]]; then
+        PORTAL_BUILD_REVISION="development"
+    fi
+    [[ "$PORTAL_BUILD_REVISION" == "development" || "$PORTAL_BUILD_REVISION" =~ ^[0-9a-f]{7,40}$ || "$PORTAL_BUILD_REVISION" =~ ^candidate-[0-9a-f]{64}$ ]] || \
+        fail "PORTAL_BUILD_REVISION must be 'development', a 7-40 character lowercase Git revision, or a candidate- prefixed SHA-256 digest."
+    if [[ "$COMMAND" == "deploy" && "$PORTAL_BUILD_REVISION" == "development" ]]; then
+        fail "Deploy requires a Git or content-derived PORTAL_BUILD_REVISION; the development tag is refused."
+    fi
+    export PORTAL_BUILD_REVISION
+}
+
+initialize_portal_revision
+validate_direct_local_portal_source
 
 detect_compose() {
     require_command docker
@@ -315,6 +397,43 @@ validate_compose() {
     echo "Single-host lab Compose configuration is valid."
 }
 
+validate_portal_sources() {
+    local required_sources=(
+        "$ROOT_DIR/.dockerignore"
+        "$ROOT_DIR/package.json"
+        "$ROOT_DIR/package-lock.json"
+        "$ROOT_DIR/index.html"
+        "$ROOT_DIR/vite.config.ts"
+        "$ROOT_DIR/web/src/main.tsx"
+        "$ROOT_DIR/deploy/portal/Dockerfile"
+        "$ROOT_DIR/deploy/portal/default.conf"
+    )
+    local source
+    for source in "${required_sources[@]}"; do
+        [[ -f "$source" ]] || fail "Required portal build source is missing: $source"
+    done
+}
+
+validate_portal_capacity() {
+    local minimum_free_kb="${PORTAL_MIN_FREE_KB:-1572864}"
+    [[ "$minimum_free_kb" =~ ^[1-9][0-9]*$ ]] || fail "PORTAL_MIN_FREE_KB must be a positive integer."
+    local available_kb
+    available_kb="$(df -Pk "$ROOT_DIR" | awk 'NR == 2 {print $4}')"
+    [[ "$available_kb" =~ ^[0-9]+$ ]] || fail "Unable to determine free disk capacity for the portal build."
+    (( available_kb >= minimum_free_kb )) || \
+        fail "Portal build requires at least ${minimum_free_kb} KiB free; only ${available_kb} KiB is available."
+}
+
+validate_portal_port() {
+    require_command ss
+    if ss -H -ltn 'sport = :3100' | grep -q .; then
+        local existing_portal
+        existing_portal="$(compose ps -q portal 2>/dev/null || true)"
+        [[ -n "$existing_portal" ]] || fail "Loopback port 3100 is already occupied by a process outside this Compose portal service."
+        echo "Loopback port 3100 is held by the existing portal service and can be updated safely."
+    fi
+}
+
 prepare_runtime_data() {
     local data_directory
     data_directory="$(resolve_env_path "$(env_value MONITORING_DATA_DIR)")"
@@ -339,9 +458,56 @@ verify_http() {
     fail "$name readiness failed after 30 attempts: $url"
 }
 
+fetch_http() {
+    local name="$1"
+    local url="$2"
+    local response
+    response="$(curl --fail --silent --show-error --max-time 5 "$url")" || fail "$name request failed: $url"
+    printf '%s' "$response"
+}
+
+verify_portal_routes() {
+    local routes=("/" "/deployments" "/infrastructure" "/performance" "/incidents" "/settings")
+    local route
+    local html
+    for route in "${routes[@]}"; do
+        html="$(fetch_http "Portal route $route" "http://127.0.0.1:3100${route}")"
+        grep -Fq '<title>Workspace Monitor</title>' <<< "$html" || \
+            fail "Portal route did not return the application shell: $route"
+    done
+
+    local asset_path
+    asset_path="$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' <<< "$html" | head -n 1)"
+    [[ -n "$asset_path" ]] || fail "Portal index did not reference its versioned JavaScript asset."
+    local bundle
+    bundle="$(fetch_http "Portal application asset" "http://127.0.0.1:3100${asset_path}")"
+    grep -Fq 'Nothing on this screen is live.' <<< "$bundle" || \
+        fail "Portal bundle does not contain the required fixture-data disclosure."
+}
+
+verify_portal_container_health() {
+    local container_id="$1"
+    local retry_delay="${MONITORING_VERIFY_RETRY_SECONDS:-2}"
+    local status
+    local attempt
+    for attempt in {1..30}; do
+        status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container_id")"
+        if [[ "$status" == "healthy" ]]; then
+            return
+        fi
+        if [[ "$status" == "unhealthy" ]]; then
+            fail "Portal container health check reported unhealthy."
+        fi
+        if [[ "$attempt" -lt 30 ]]; then
+            sleep "$retry_delay"
+        fi
+    done
+    fail "Portal container did not become healthy after 30 attempts; last status: $status"
+}
+
 verify_stack() {
     require_command curl
-    local services=(prometheus grafana blackbox-exporter node-exporter cadvisor gatus-internal gatus-public-path)
+    local services=(portal prometheus grafana blackbox-exporter node-exporter cadvisor gatus-internal gatus-public-path)
     local service
     local container_id
     local running
@@ -351,34 +517,48 @@ verify_stack() {
         running="$(docker inspect --format '{{.State.Running}}' "$container_id")"
         [[ "$running" == "true" ]] || fail "Container is not running for service: $service"
     done
+    verify_http "Portal health" http://127.0.0.1:3100/healthz
+    container_id="$(compose ps -q portal)"
+    verify_portal_container_health "$container_id"
+    verify_portal_routes
     verify_http Prometheus http://127.0.0.1:9090/-/ready
     verify_http Grafana http://127.0.0.1:3000/api/health
     verify_http Blackbox http://127.0.0.1:9115/-/healthy
     verify_http "Gatus internal" http://127.0.0.1:8085/metrics
     verify_http "Gatus public-path" http://127.0.0.1:8186/metrics
-    echo "Single-host lab monitoring stack is running and ready."
+    echo "Single-host lab monitoring stack and fixture portal are running and ready."
 }
 
 case "$COMMAND" in
     plan)
+        validate_portal_sources
         validate_compose
         ;;
     preflight)
         validate_runtime_environment
+        validate_portal_sources
         validate_compose
         docker info >/dev/null
+        validate_portal_capacity
+        validate_portal_port
         echo "Single-host lab preflight passed."
         ;;
     deploy)
         validate_runtime_environment
+        validate_portal_sources
         validate_compose
         docker info >/dev/null
+        validate_portal_capacity
+        validate_portal_port
         prepare_runtime_data
         echo "Pulling pinned images for the single-host lab profile..."
-        compose pull
+        compose pull prometheus grafana blackbox-exporter node-exporter cadvisor gatus-internal gatus-public-path
+        echo "Building portal image for revision ${PORTAL_BUILD_REVISION}..."
+        compose build --pull portal
         echo "Deploying single-host lab monitoring stack..."
         compose up -d --remove-orphans
         verify_stack
+        printf '%s\n' "$PORTAL_BUILD_REVISION" > "$RUNTIME_DIR/portal-revision"
         ;;
     status)
         validate_compose

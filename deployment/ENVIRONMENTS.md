@@ -25,6 +25,7 @@ The CPQ server currently has Docker 29.1.3 and standalone `docker-compose` 5.3.1
 
 | Service | Host port |
 | --- | ---: |
+| Enterprise portal | 3100 |
 | Grafana | 3000 |
 | Prometheus | 9090 |
 | Blackbox Exporter | 9115 |
@@ -86,13 +87,13 @@ Read-only operations:
   --host 192.168.86.246 --ssh-user jhaynes --tail 200
 ```
 
-### Cloudflare tunnel
+### Portal deployment and Cloudflare tunnel
 
-The user-managed tunnel should route `monitor.jefferyhaynes.net` to `http://localhost:3000` on the CPQ host during Sprint 0. Grafana is configured with `https://monitor.jefferyhaynes.net` as its public root URL. Protect the hostname with Cloudflare Access before public use. Do not store tunnel tokens, credentials, account IDs, or Access policy secrets in this repository.
+The deployment command creates an explicit credential-free source archive, tags the portal with its `candidate-<sha256>` content revision, verifies that digest on the server before replacing the release directory, and binds the portal to `127.0.0.1:3100`. It leaves Grafana running on `127.0.0.1:3000` and never changes Cloudflare configuration. Preflight rejects insufficient build capacity and an unrelated listener on port `3100`.
 
-Sprint 1.1 will replace Grafana as the root destination with the enterprise monitoring portal. The planned portal binding is `127.0.0.1:3100`; Grafana remains available internally on `127.0.0.1:3000` and does not receive a public hostname without a separate review.
+Before Sprint 1.1 cutover, the user-managed tunnel continues to route `monitor.jefferyhaynes.net` to `http://localhost:3000` on the CPQ host. Grafana is configured with `https://monitor.jefferyhaynes.net` as its public root URL. Protect the hostname with Cloudflare Access before public use. Do not store tunnel tokens, credentials, account IDs, or Access policy secrets in this repository.
 
-The planned cutover sequence is intentionally reversible:
+The implemented deployment and operator-controlled cutover sequence is intentionally reversible:
 
 1. Deploy the portal container without changing Cloudflare.
 2. Verify `/healthz`, all primary routes, fixture disclosure, resource limits, and existing Grafana/monitoring health over loopback.
@@ -101,7 +102,7 @@ The planned cutover sequence is intentionally reversible:
 5. Verify public TLS, Access enforcement, and portal navigation.
 6. If verification fails, restore the tunnel origin to `http://localhost:3000`; this tunnel rollback is independent of container rollback.
 
-These are planned Sprint 1.1 steps, not current deployment commands. The implementation must add automated verification and a reviewed runbook before the tunnel is changed.
+The repository script automates steps 1 and 2 only. Steps 3–6 remain explicit operator actions. See [PORTAL_ROLLBACK.md](PORTAL_ROLLBACK.md) for the exact image and tunnel rollback procedures. The portal remains visibly fixture-backed after deployment.
 
 The public-path Gatus process runs on the same host. It validates DNS, TLS, reverse-proxy, and public URL behavior, but it cannot detect loss of the server, LAN, ISP, host Docker daemon, or host power independently.
 

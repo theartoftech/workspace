@@ -29,7 +29,7 @@
 | ---: | --- | --- | --- |
 | 0 | Foundation and delivery guardrails | Implemented locally; not deployed | Render the stack, validate probes, and show deployment plans without mutating a target |
 | 1 | Enterprise application shell | Implemented locally; ready for review | Navigate the approved enterprise shell using fixture data |
-| 1.1 | Portal packaging and lab deployment | Planned | Deploy the fixture portal beside the monitoring stack, verify it locally, and perform a reversible Cloudflare cutover |
+| 1.1 | Portal packaging and lab deployment | Implemented locally; not deployed | Build and run the hardened fixture portal beside the monitoring stack, then review the reversible Cloudflare cutover |
 | 2 | Live deployment inventory | Planned | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
 | 3 | Traffic and performance | Planned | Inspect real request rate, errors, saturation, and latency graphs |
 | 4 | Infrastructure topology | Planned | Drill from an environment into workloads, nodes, and dependencies |
@@ -123,7 +123,7 @@ Turn the approved mockup direction into a responsive enterprise web application 
 
 ### Status
 
-Planned. This increment begins only after the Sprint 1 shell is reviewed and accepted. No deployment is implied by the plan.
+Implemented and tested locally. The production image, Compose service, guarded deployment path, automated verification, and rollback runbook are ready for review. The CPQ server and Cloudflare tunnel have not been changed.
 
 ### Objective
 

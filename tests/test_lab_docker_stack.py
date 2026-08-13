@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -11,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STACK_DIR = ROOT / "deploy/compose/lab-observability"
 DEPLOY_SCRIPT = ROOT / "deployment/scripts/deploy-lab-docker.sh"
+PORTAL_DIR = ROOT / "deploy/portal"
+ROLLBACK_RUNBOOK = ROOT / "deployment/PORTAL_ROLLBACK.md"
 
 
 def run_script(*arguments: str, environment: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -46,6 +49,7 @@ class SingleHostComposeContractTests(unittest.TestCase):
             services,
             {
                 "prometheus",
+                "portal",
                 "grafana",
                 "blackbox-exporter",
                 "node-exporter",
@@ -68,13 +72,13 @@ class SingleHostComposeContractTests(unittest.TestCase):
         ):
             self.assertIn(image, compose)
         self.assertNotIn(":latest", compose)
-        self.assertEqual(compose.count("mem_limit:"), 7)
-        self.assertEqual(compose.count("cpus:"), 7)
+        self.assertEqual(compose.count("mem_limit:"), 8)
+        self.assertEqual(compose.count("cpus:"), 8)
 
     def test_operator_interfaces_bind_to_loopback_without_port_conflicts(self) -> None:
         compose = (STACK_DIR / "compose.yaml").read_text(encoding="utf-8")
 
-        for port in ("3000:3000", "9090:9090", "9115:9115", "8085:8080", "8186:8080"):
+        for port in ("3100:8080", "3000:3000", "9090:9090", "9115:9115", "8085:8080", "8186:8080"):
             self.assertIn(f'"${{MONITORING_BIND_ADDRESS:-127.0.0.1}}:{port}"', compose)
         self.assertNotIn(":8086:8080", compose)
         for cpq_port in ("8080:8080", "8081:8080", "8082:8080", "8083:8080", "8088:8080"):
@@ -124,6 +128,83 @@ class SingleHostComposeContractTests(unittest.TestCase):
         self.assertNotIn("alerts:", internal_config)
         self.assertNotIn("alerting:", public_path_config)
         self.assertNotIn("alerts:", public_path_config)
+
+
+class PortalPackagingContractTests(unittest.TestCase):
+    def test_portal_uses_a_reproducible_multi_stage_unprivileged_image(self) -> None:
+        dockerfile = (PORTAL_DIR / "Dockerfile").read_text(encoding="utf-8")
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            dockerfile,
+            r"FROM node:[0-9]+\.[0-9]+\.[0-9]+-alpine[0-9.]+@sha256:[0-9a-f]{64} AS build",
+        )
+        self.assertIn("RUN npm ci --ignore-scripts", dockerfile)
+        self.assertIn("RUN npm run build", dockerfile)
+        self.assertRegex(
+            dockerfile,
+            r"FROM nginxinc/nginx-unprivileged:[0-9]+\.[0-9]+\.[0-9]+-alpine[0-9.]+@sha256:[0-9a-f]{64}",
+        )
+        self.assertIn("COPY --from=build", dockerfile)
+        self.assertIn("/workspace/dist", dockerfile)
+        self.assertIn("USER 101:101", dockerfile)
+        self.assertIn("org.opencontainers.image.revision", dockerfile)
+        self.assertIn("grep -q '^healthy$'", dockerfile)
+        self.assertNotIn("grep --quiet", dockerfile)
+        for excluded in ("node_modules", "dist", "coverage", ".git", ".env", "runtime"):
+            self.assertIn(excluded, dockerignore)
+        self.assertNotIn("**/data", dockerignore)
+        self.assertNotIn("web/src/data", dockerignore)
+
+    def test_nginx_serves_health_spa_routes_caching_and_security_headers(self) -> None:
+        nginx = (PORTAL_DIR / "default.conf").read_text(encoding="utf-8")
+
+        self.assertIn("listen 8080", nginx)
+        self.assertIn("location = /healthz", nginx)
+        self.assertIn('return 200 "healthy\\n"', nginx)
+        self.assertIn("try_files $uri $uri/ /index.html", nginx)
+        self.assertIn("public, max-age=31536000, immutable", nginx)
+        self.assertIn('default "no-store"', nginx)
+        for header in (
+            "Content-Security-Policy",
+            "X-Content-Type-Options",
+            "X-Frame-Options",
+            "Referrer-Policy",
+            "Permissions-Policy",
+        ):
+            self.assertIn(f"add_header {header}", nginx)
+
+    def test_portal_compose_service_is_loopback_only_bounded_and_hardened(self) -> None:
+        compose = (STACK_DIR / "compose.yaml").read_text(encoding="utf-8")
+        portal = compose.split("  portal:\n", maxsplit=1)[1].split("\n  prometheus:", maxsplit=1)[0]
+
+        self.assertIn("context: ../../..", portal)
+        self.assertIn("dockerfile: deploy/portal/Dockerfile", portal)
+        self.assertIn("PORTAL_BUILD_REVISION", portal)
+        self.assertIn('image: "workspace-monitor-portal:${PORTAL_BUILD_REVISION:-development}"', portal)
+        self.assertIn('user: "101:101"', portal)
+        self.assertIn("read_only: true", portal)
+        self.assertIn("no-new-privileges:true", portal)
+        self.assertIn("cap_drop:\n      - ALL", portal)
+        self.assertIn('"${MONITORING_BIND_ADDRESS:-127.0.0.1}:3100:8080"', portal)
+        self.assertIn("healthcheck:", portal)
+        self.assertIn("http://127.0.0.1:8080/healthz", portal)
+        self.assertIn("grep -q '^healthy$'", portal)
+        self.assertNotIn("grep --quiet", portal)
+        self.assertIn("tmpfs:", portal)
+        self.assertIn("mem_limit: 128m", portal)
+        self.assertIn("cpus: 0.25", portal)
+
+    def test_portal_rollback_runbook_separates_container_and_tunnel_recovery(self) -> None:
+        runbook = ROLLBACK_RUNBOOK.read_text(encoding="utf-8")
+
+        self.assertIn("Container rollback", runbook)
+        self.assertIn("Tunnel-origin rollback", runbook)
+        self.assertIn("--no-build", runbook)
+        self.assertIn("http://localhost:3100", runbook)
+        self.assertIn("http://localhost:3000", runbook)
+        self.assertIn("Cloudflare Access", runbook)
+        self.assertIn("candidate-<sha256>", runbook)
 
 
 class SingleHostDeploymentScriptTests(unittest.TestCase):
@@ -197,6 +278,7 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
                 encoding="utf-8",
             )
             write_executable(temporary / "docker", "#!/usr/bin/env bash\nexit 0\n")
+            write_executable(temporary / "ss", "#!/usr/bin/env bash\nexit 0\n")
 
             result = run_script(
                 "preflight",
@@ -207,6 +289,161 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_preflight_rejects_port_occupied_outside_the_portal_service(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            password_file = temporary / "grafana_admin_password"
+            password_file.write_text("valid-test-password\n", encoding="utf-8")
+            environment_file = temporary / ".env"
+            environment_file.write_text(
+                "\n".join(
+                    (
+                        "MONITORING_BIND_ADDRESS=127.0.0.1",
+                        "MONITORING_PUBLIC_HOST=monitor.jefferyhaynes.net",
+                        "MONITORING_PUBLIC_URL=https://monitor.jefferyhaynes.net",
+                        "MONITORING_UID=1000",
+                        "MONITORING_GID=1000",
+                        f"MONITORING_DATA_DIR={temporary / 'data'}",
+                        f"MONITORING_ENV_FILE={environment_file}",
+                        f"GRAFANA_ADMIN_PASSWORD_FILE={password_file}",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            write_executable(temporary / "docker", "#!/usr/bin/env bash\nexit 0\n")
+            write_executable(
+                temporary / "ss",
+                "#!/usr/bin/env bash\nprintf 'LISTEN 0 4096 127.0.0.1:3100 0.0.0.0:*\\n'\n",
+            )
+
+            result = run_script(
+                "preflight",
+                "--env-file",
+                str(environment_file),
+                environment={"PATH": f"{temporary}:{os.environ['PATH']}"},
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("port 3100 is already occupied", result.stderr)
+
+    def test_invalid_portal_revision_fails_explicitly(self) -> None:
+        result = run_script(
+            "plan",
+            "--env-file",
+            str(STACK_DIR / ".env.example"),
+            environment={"PORTAL_BUILD_REVISION": "not-a-git-revision"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PORTAL_BUILD_REVISION", result.stderr)
+
+    def test_candidate_content_revision_is_valid_for_portal_builds(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            write_executable(temporary / "docker", "#!/usr/bin/env bash\nexit 0\n")
+
+            result = run_script(
+                "plan",
+                "--env-file",
+                str(STACK_DIR / ".env.example"),
+                environment={
+                    "PATH": f"{temporary}:{os.environ['PATH']}",
+                    "PORTAL_BUILD_REVISION": f"candidate-{'a' * 64}",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_remote_deploy_packages_dirty_candidate_with_verified_content_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            ssh_calls = temporary / "ssh-calls"
+            archive_contents = temporary / "archive-contents"
+            ssh_count = temporary / "ssh-count"
+            write_executable(
+                temporary / "git",
+                "#!/usr/bin/env bash\nprintf 'git must not determine candidate provenance\\n' >&2\nexit 99\n",
+            )
+            write_executable(
+                temporary / "ssh",
+                """#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MONITORING_SSH_CALLS"
+count=0
+[[ ! -f "$MONITORING_SSH_COUNT" ]] || count="$(<"$MONITORING_SSH_COUNT")"
+count=$((count + 1))
+printf '%s' "$count" > "$MONITORING_SSH_COUNT"
+if (( count == 1 )); then
+    tar -tf - > "$MONITORING_ARCHIVE_CONTENTS"
+else
+    cat >/dev/null
+fi
+""",
+            )
+
+            result = run_script(
+                "deploy",
+                "--confirm-deploy",
+                "lab-docker",
+                "--host",
+                "cpqserver.example",
+                "--ssh-user",
+                "jhaynes",
+                environment={
+                    "PATH": f"{temporary}:{os.environ['PATH']}",
+                    "MONITORING_ARCHIVE_CONTENTS": str(archive_contents),
+                    "MONITORING_SSH_CALLS": str(ssh_calls),
+                    "MONITORING_SSH_COUNT": str(ssh_count),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            revision_match = re.search(r"Candidate revision: (candidate-[0-9a-f]{64})", result.stdout)
+            self.assertIsNotNone(revision_match, result.stdout)
+            revision = revision_match.group(1)
+            calls = ssh_calls.read_text(encoding="utf-8")
+            self.assertIn("sha256sum --check", calls)
+            self.assertIn(revision, calls)
+            self.assertIn(f"PORTAL_BUILD_REVISION={revision}", calls)
+            sync_call = calls.splitlines()[0]
+            self.assertLess(sync_call.index("sha256sum --check"), sync_call.index("rm -rf --"))
+
+            synchronized_paths = archive_contents.read_text(encoding="utf-8").splitlines()
+            self.assertTrue(any(path.endswith("web/src/main.tsx") for path in synchronized_paths))
+            self.assertTrue(any(path.endswith("deploy/portal/Dockerfile") for path in synchronized_paths))
+            forbidden_parts = ("/.git/", "/node_modules/", "/dist/", "/coverage/", "/runtime/")
+            for path in synchronized_paths:
+                normalized_path = f"/{path.removeprefix('./')}"
+                self.assertFalse(any(part in normalized_path for part in forbidden_parts), path)
+                self.assertNotIn("/deploy/compose/lab-observability/data/", normalized_path, path)
+                self.assertNotIn("/probes/internal/data/", normalized_path, path)
+                self.assertNotIn("/probes/external/data/", normalized_path, path)
+                self.assertFalse(normalized_path.endswith("/.env"), path)
+                self.assertNotIn("/secrets/", normalized_path, path)
+
+    def test_direct_local_deploy_still_rejects_dirty_git_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            write_executable(
+                temporary / "git",
+                """#!/usr/bin/env bash
+if [[ " $* " == *" rev-parse --short=12 HEAD "* ]]; then printf 'abcdef123456\n'; exit 0; fi
+if [[ " $* " == *" rev-parse --is-inside-work-tree "* ]]; then exit 0; fi
+if [[ " $* " == *" status --porcelain --untracked-files=normal "* ]]; then printf ' M web/src/main.tsx\n'; exit 0; fi
+exit 1
+""",
+            )
+
+            result = run_script(
+                "deploy",
+                "--confirm-deploy",
+                "lab-docker",
+                environment={"PATH": f"{temporary}:{os.environ['PATH']}"},
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Direct local deploy requires a clean Git worktree", result.stderr)
+
     def test_remote_sync_excludes_secrets_and_runtime_data(self) -> None:
         source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
@@ -214,6 +451,24 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
         self.assertNotIn('scp -r .', source)
         self.assertIn("Runtime .env, secrets, and data are never synchronized", source)
         self.assertIn("--exclude='._*'", source)
+        for exclusion in ("node_modules", "dist", "coverage", ".git", "runtime", ".env"):
+            self.assertIn(f"--exclude='{exclusion}'", source)
+        self.assertIn("--exclude='*/secrets'", source)
+        self.assertIn("--exclude='*/secrets/*'", source)
+        for portal_source in ("package.json", "package-lock.json", "web", "deploy/portal"):
+            self.assertIn(portal_source, source)
+
+    def test_script_builds_portal_and_verifies_health_routes_and_fixture_disclosure(self) -> None:
+        source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("compose build --pull portal", source)
+        self.assertNotIn("compose pull\n", source)
+        self.assertIn('verify_http "Portal health" http://127.0.0.1:3100/healthz', source)
+        for route in ("/", "/deployments", "/infrastructure", "/performance", "/incidents", "/settings"):
+            self.assertIn(f'"{route}"', source)
+        self.assertIn("Nothing on this screen is live.", source)
+        self.assertIn("validate_portal_port", source)
+        self.assertIn("PORTAL_BUILD_REVISION", source)
 
     def test_remote_preflight_cleanup_exits_successfully(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -257,7 +512,8 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
                 temporary / "docker",
                 """#!/usr/bin/env bash
 if [[ " $* " == *" ps -q "* ]]; then printf 'container-id\n'; fi
-if [[ "${1:-}" == inspect ]]; then printf 'true\n'; fi
+if [[ "${1:-}" == inspect && "$*" == *"State.Health"* ]]; then printf 'healthy\n';
+elif [[ "${1:-}" == inspect ]]; then printf 'true\n'; fi
 exit 0
 """,
             )
@@ -268,7 +524,12 @@ count=0
 [[ ! -f "$MONITORING_CURL_COUNT" ]] || count="$(<"$MONITORING_CURL_COUNT")"
 count=$((count + 1))
 printf '%s' "$count" > "$MONITORING_CURL_COUNT"
-(( count >= 3 ))
+if (( count < 3 )); then exit 1; fi
+if [[ " $* " == *" http://127.0.0.1:3100/assets/"* ]]; then
+    printf 'Nothing on this screen is live.'
+elif [[ " $* " == *" http://127.0.0.1:3100/"* && " $* " != *"/healthz"* ]]; then
+    printf '<title>Workspace Monitor</title><script src="/assets/index-test.js"></script>'
+fi
 """,
             )
 

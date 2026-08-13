@@ -9,7 +9,7 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Capability | Included in this slice |
 | --- | --- |
 | Service catalog | Strict JSON contract for CPQ demo/test, OAuth, Mailpit, and ERPNet |
-| Primary lab monitoring | Docker Compose with Prometheus, Grafana, Blackbox Exporter, node-exporter, cAdvisor, and Gatus |
+| Primary lab monitoring | Docker Compose with the enterprise portal, Prometheus, Grafana, Blackbox Exporter, node-exporter, cAdvisor, and Gatus |
 | Future cloud monitoring | `kube-prometheus-stack` Helm chart with Prometheus, Grafana, Alertmanager, and Kubernetes metrics |
 | Synthetic probe support | Prometheus Blackbox Exporter plus dedicated Gatus nodes |
 | Direct application metrics | CPQ demo `/api/actuator/prometheus` through one `ServiceMonitor` |
@@ -17,7 +17,7 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Public-path simulation | Public CPQ demo and ERPNet URLs, including TLS expiry, from the same CPQ server—not an independent external vantage |
 | Alert delivery | Deferred until notification destinations and credential handling are selected |
 
-The enterprise portal, SSO for monitoring tools, safe transaction journeys, log aggregation, additional application scrapes, and deployment automation remain intentionally outside this foundation slice.
+The portal remains fixture-backed in Sprint 1.1. Live data, SSO for monitoring tools, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.
 
 ## Repository layout
 
@@ -26,7 +26,9 @@ The enterprise portal, SSO for monitoring tools, safe transaction journeys, log 
 - `src/lab_observability/catalog.py` — strict runtime validation with explicit errors.
 - `deploy/helm/lab-observability` — pinned umbrella Helm chart for the k3s monitoring namespace.
 - `deploy/compose/lab-observability` — primary single-host Docker lab stack.
+- `deploy/portal` — digest-pinned multi-stage portal image and hardened Nginx runtime.
 - `deployment/scripts` — guarded plan, preflight, deploy, status, and verification commands.
+- `deployment/PORTAL_ROLLBACK.md` — independent portal-image and Cloudflare-origin rollback procedures.
 - `deployment/ENVIRONMENTS.md` — target topology, secret preparation, and operator workflow.
 - `probes/internal` — Gatus node intended to run inside the lab network.
 - `probes/external` — Gatus node intended to run on an independent public host.
@@ -56,7 +58,7 @@ npm run lint
 npm run build
 ```
 
-The approved route set is Overview, Deployments, Infrastructure, Performance, Incidents, and Settings. Live provider adapters, authentication, and deployment of this shell remain later-sprint work.
+The approved route set is Overview, Deployments, Infrastructure, Performance, Incidents, and Settings. Live provider adapters and authentication remain later-sprint work. Sprint 1.1 packages this same fixture-backed shell for the lab.
 
 ## Acceptance criteria
 
@@ -88,7 +90,14 @@ After provisioning the remote runtime `.env` and Grafana password file, run pref
   --confirm-deploy lab-docker
 ```
 
-For Sprint 0, route the user-managed `monitor.jefferyhaynes.net` Cloudflare tunnel to `http://localhost:3000` on the CPQ server and protect it with Cloudflare Access. Tunnel credentials stay outside Git.
+The deploy command builds a revision-tagged portal image on the CPQ server and starts it on `127.0.0.1:3100`; Grafana remains on `127.0.0.1:3000`. It does not modify Cloudflare. Verify the complete stack before any ingress change:
+
+```sh
+./deployment/scripts/deploy-lab-docker.sh verify \
+  --host 192.168.86.246 --ssh-user jhaynes
+```
+
+After that verification and a separate operator decision, route the user-managed `monitor.jefferyhaynes.net` tunnel to `http://localhost:3100` on the CPQ server and retain `http://localhost:3000` as the immediate tunnel rollback value. Protect the hostname with Cloudflare Access. Tunnel credentials stay outside Git. Follow [the portal deployment and rollback runbook](deployment/PORTAL_ROLLBACK.md) for the cutover and both rollback paths.
 
 ## Review the future Helm stack
 
