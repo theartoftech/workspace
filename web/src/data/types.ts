@@ -1,21 +1,16 @@
-export type EnvironmentId = "all" | "demo" | "test" | "shared";
-export type TimeRange = "15m" | "1h" | "6h" | "24h";
-export type HealthStatus = "healthy" | "degraded" | "critical" | "unknown";
-export type DataMode = "fixture" | "live";
+import type {
+  HealthState,
+  InventoryEnvironment,
+  InventoryMode,
+  InventorySourceStatus,
+  InventorySummary,
+  ServiceInventory
+} from "../../../shared/inventory";
 
-export interface ServiceHealth {
-  readonly id: string;
-  readonly name: string;
-  readonly kind: "application" | "identity" | "mail" | "erp";
-  readonly environment: Exclude<EnvironmentId, "all">;
-  readonly status: HealthStatus;
-  readonly uptime: number;
-  readonly latencyMs: number;
-  readonly requestRate: number;
-  readonly version: string;
-  readonly owner: string;
-  readonly lastChecked: string;
-}
+export type EnvironmentId = InventoryEnvironment;
+export type TimeRange = "15m" | "1h" | "6h" | "24h";
+export type HealthStatus = HealthState;
+export type DataMode = InventoryMode | "fixture";
 
 export interface IncidentSummary {
   readonly id: string;
@@ -34,22 +29,15 @@ export interface TrafficPoint {
   readonly latency: number;
 }
 
-export interface OverviewSummary {
-  readonly totalServices: number;
-  readonly healthyServices: number;
-  readonly degradedServices: number;
-  readonly criticalServices: number;
-  readonly uptime: number;
-  readonly activeIncidents: number;
-}
-
 export interface OverviewSnapshot {
   readonly mode: DataMode;
   readonly generatedAt: string;
+  readonly lastObservedAt: string | null;
   readonly environment: EnvironmentId;
   readonly timeRange: TimeRange;
-  readonly summary: OverviewSummary;
-  readonly services: readonly ServiceHealth[];
+  readonly summary: InventorySummary;
+  readonly services: readonly ServiceInventory[];
+  readonly sources: readonly InventorySourceStatus[];
   readonly incidents: readonly IncidentSummary[];
   readonly traffic: readonly TrafficPoint[];
 }

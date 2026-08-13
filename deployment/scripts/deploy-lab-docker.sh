@@ -24,7 +24,7 @@ Usage: deployment/scripts/deploy-lab-docker.sh <command> [options]
 Commands:
   plan        Validate the single-host Compose model with example settings; no containers start.
   preflight   Validate real settings, secret files, Docker, and Compose without starting containers.
-  deploy      Build the portal, pull pinned images, and start the lab stack. Requires exact confirmation.
+  deploy      Build the portal/API, pull pinned images, and start the lab stack. Requires exact confirmation.
   status      Show container state without changing the deployment.
   verify      Verify containers and local HTTP readiness endpoints.
   logs        Show recent stack logs without following them.
@@ -224,8 +224,14 @@ sync_and_run_remote() {
             tsconfig.json \
             tsconfig.app.json \
             tsconfig.node.json \
+            tsconfig.server.json \
             web \
+            shared \
+            server \
+            catalog \
             deploy/portal \
+            deploy/inventory-api \
+            deploy/kubernetes \
             deployment/scripts/deploy-lab-docker.sh \
             deployment/PORTAL_ROLLBACK.md \
             deploy/compose/lab-observability \
@@ -405,8 +411,13 @@ validate_portal_sources() {
         "$ROOT_DIR/index.html"
         "$ROOT_DIR/vite.config.ts"
         "$ROOT_DIR/web/src/main.tsx"
+        "$ROOT_DIR/shared/inventory.ts"
+        "$ROOT_DIR/server/src/main.ts"
+        "$ROOT_DIR/catalog/services.json"
         "$ROOT_DIR/deploy/portal/Dockerfile"
         "$ROOT_DIR/deploy/portal/default.conf"
+        "$ROOT_DIR/deploy/inventory-api/Dockerfile"
+        "$ROOT_DIR/deploy/kubernetes/inventory-reader-rbac.yaml"
     )
     local source
     for source in "${required_sources[@]}"; do
@@ -437,8 +448,9 @@ validate_portal_port() {
 prepare_runtime_data() {
     local data_directory
     data_directory="$(resolve_env_path "$(env_value MONITORING_DATA_DIR)")"
-    mkdir -p "$data_directory/gatus-internal" "$data_directory/gatus-public-path"
-    [[ -w "$data_directory/gatus-internal" && -w "$data_directory/gatus-public-path" ]] || \
+    mkdir -p "$data_directory/gatus-internal" "$data_directory/gatus-public-path" "$data_directory/runtime-secrets"
+    chmod 0755 "$data_directory/runtime-secrets"
+    [[ -w "$data_directory/gatus-internal" && -w "$data_directory/gatus-public-path" && -r "$data_directory/runtime-secrets" ]] || \
         fail "Gatus data directories are not writable under: $data_directory"
 }
 
@@ -467,7 +479,7 @@ fetch_http() {
 }
 
 verify_portal_routes() {
-    local routes=("/" "/deployments" "/infrastructure" "/performance" "/incidents" "/settings")
+    local routes=("/" "/deployments" "/services/cpq-demo" "/infrastructure" "/performance" "/incidents" "/settings")
     local route
     local html
     for route in "${routes[@]}"; do
@@ -481,8 +493,16 @@ verify_portal_routes() {
     [[ -n "$asset_path" ]] || fail "Portal index did not reference its versioned JavaScript asset."
     local bundle
     bundle="$(fetch_http "Portal application asset" "http://127.0.0.1:3100${asset_path}")"
-    grep -Fq 'Nothing on this screen is live.' <<< "$bundle" || \
-        fail "Portal bundle does not contain the required fixture-data disclosure."
+    grep -Fq 'Live inventory' <<< "$bundle" || \
+        fail "Portal bundle does not contain the required live-inventory disclosure."
+
+    local inventory
+    inventory="$(fetch_http "Inventory API" "http://127.0.0.1:3100/api/v1/inventory?environment=all")"
+    grep -Fq '"apiVersion":1' <<< "$inventory" || fail "Inventory API response has no supported API version."
+    grep -Fq '"id":"cpq-demo"' <<< "$inventory" || fail "Inventory API response is missing CPQ Demo."
+    local source_evidence
+    source_evidence="$(fetch_http "Internal Gatus evidence proxy" "http://127.0.0.1:3100/tools/gatus-internal/api/v1/endpoints/statuses")"
+    grep -Fq 'cpq-demo-ready-internal' <<< "$source_evidence" || fail "Internal Gatus evidence proxy is missing CPQ Demo."
 }
 
 verify_portal_container_health() {
@@ -507,7 +527,7 @@ verify_portal_container_health() {
 
 verify_stack() {
     require_command curl
-    local services=(portal prometheus grafana blackbox-exporter node-exporter cadvisor gatus-internal gatus-public-path)
+    local services=(portal inventory-api prometheus grafana blackbox-exporter node-exporter cadvisor gatus-internal gatus-public-path)
     local service
     local container_id
     local running
@@ -526,7 +546,7 @@ verify_stack() {
     verify_http Blackbox http://127.0.0.1:9115/-/healthy
     verify_http "Gatus internal" http://127.0.0.1:8085/metrics
     verify_http "Gatus public-path" http://127.0.0.1:8186/metrics
-    echo "Single-host lab monitoring stack and fixture portal are running and ready."
+    echo "Single-host lab monitoring stack and live inventory portal are running and ready."
 }
 
 case "$COMMAND" in
@@ -553,8 +573,8 @@ case "$COMMAND" in
         prepare_runtime_data
         echo "Pulling pinned images for the single-host lab profile..."
         compose pull prometheus grafana blackbox-exporter node-exporter cadvisor gatus-internal gatus-public-path
-        echo "Building portal image for revision ${PORTAL_BUILD_REVISION}..."
-        compose build --pull portal
+        echo "Building portal and inventory API images for revision ${PORTAL_BUILD_REVISION}..."
+        compose build --pull inventory-api portal
         echo "Deploying single-host lab monitoring stack..."
         compose up -d --remove-orphans
         verify_stack

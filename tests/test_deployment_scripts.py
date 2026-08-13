@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +24,9 @@ def run_script(script: Path, *arguments: str, environment: dict[str, str] | None
         env=process_environment,
         check=False,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
         text=True,
+        timeout=30,
     )
 
 
@@ -34,6 +37,17 @@ def write_mock(directory: Path, name: str) -> None:
         encoding="utf-8",
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+class DeploymentTestHarnessTests(unittest.TestCase):
+    def test_script_runner_closes_stdin_and_enforces_a_timeout(self) -> None:
+        completed = subprocess.CompletedProcess(["bash"], 0, "", "")
+        with patch.object(subprocess, "run", return_value=completed) as mocked_run:
+            run_script(K8S_SCRIPT, "help")
+
+        call_options = mocked_run.call_args.kwargs
+        self.assertIs(call_options["stdin"], subprocess.DEVNULL)
+        self.assertEqual(call_options["timeout"], 30)
 
 
 class KubernetesDeploymentScriptTests(unittest.TestCase):

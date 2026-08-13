@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from lab_observability.catalog import Catalog, CatalogValidationError  # noqa: E402
+from lab_observability.catalog import Catalog, CatalogValidationError, WorkloadKind  # noqa: E402
 
 
 class CatalogContractTests(unittest.TestCase):
@@ -25,6 +25,11 @@ class CatalogContractTests(unittest.TestCase):
             {service.service_id for service in catalog.services},
             {"cpq-demo", "cpq-test", "oauth", "mailpit", "erpnet"},
         )
+        demo = next(service for service in catalog.services if service.service_id == "cpq-demo")
+        self.assertEqual(len(demo.workloads), 1)
+        self.assertEqual(demo.workloads[0].kind, WorkloadKind.DEPLOYMENT)
+        self.assertEqual(demo.workloads[0].namespace, "default")
+        self.assertEqual(demo.workloads[0].name, "application")
 
     def test_catalog_covers_each_probe_vantage_point(self) -> None:
         catalog = Catalog.from_path(self.catalog_path)
@@ -95,6 +100,13 @@ class CatalogContractTests(unittest.TestCase):
         raw["services"][0]["probes"][0]["silentFallback"] = True
 
         with self.assertRaisesRegex(CatalogValidationError, "unknown fields"):
+            Catalog.from_dict(raw)
+
+    def test_unknown_workload_kind_is_rejected(self) -> None:
+        raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
+        raw["services"][0]["workloads"][0]["kind"] = "StatefulSet"
+
+        with self.assertRaisesRegex(CatalogValidationError, "workload.*kind|unsupported value"):
             Catalog.from_dict(raw)
 
     def test_missing_and_invalid_catalog_files_are_rejected(self) -> None:

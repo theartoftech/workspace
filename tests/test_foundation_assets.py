@@ -79,5 +79,17 @@ class GatusFoundationTests(unittest.TestCase):
             self.assertNotIn("bearer ", config.lower())
 
 
+class InventoryReaderRbacTests(unittest.TestCase):
+    def test_inventory_reader_is_get_only_and_bound_only_to_catalog_namespaces(self) -> None:
+        manifest = (ROOT / "deploy/kubernetes/inventory-reader-rbac.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("name: workspace-monitor-inventory", manifest)
+        self.assertIn('verbs: ["get"]', manifest)
+        self.assertNotRegex(manifest, r'(?m)verbs:.*(?:create|update|patch|delete|watch|list)')
+        self.assertEqual(manifest.count("kind: RoleBinding"), 2)
+        self.assertIn("namespace: default", manifest)
+        self.assertIn("namespace: cpq-test", manifest)
+
+
 if __name__ == "__main__":
     unittest.main()

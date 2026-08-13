@@ -8,6 +8,13 @@
       "environment": "demo",
       "owner": "Development Lab",
       "criticality": "critical",
+      "workloads": [
+        {
+          "kind": "Deployment",
+          "namespace": "default",
+          "name": "application"
+        }
+      ],
       "probes": [
         {
           "id": "cpq-demo-ready-internal",
@@ -41,6 +48,13 @@
       "environment": "test",
       "owner": "Development Lab",
       "criticality": "high",
+      "workloads": [
+        {
+          "kind": "Deployment",
+          "namespace": "cpq-test",
+          "name": "application"
+        }
+      ],
       "probes": [
         {
           "id": "cpq-test-ready-internal",
@@ -62,6 +76,18 @@
       "environment": "shared",
       "owner": "Development Lab",
       "criticality": "critical",
+      "workloads": [
+        {
+          "kind": "Pod",
+          "namespace": "default",
+          "name": "keycloak"
+        },
+        {
+          "kind": "Pod",
+          "namespace": "cpq-test",
+          "name": "keycloak"
+        }
+      ],
       "probes": [
         {
           "id": "oauth-demo-discovery-internal",
@@ -92,6 +118,18 @@
       "environment": "shared",
       "owner": "Development Lab",
       "criticality": "medium",
+      "workloads": [
+        {
+          "kind": "Deployment",
+          "namespace": "default",
+          "name": "mailpit"
+        },
+        {
+          "kind": "Deployment",
+          "namespace": "cpq-test",
+          "name": "mailpit"
+        }
+      ],
       "probes": [
         {
           "id": "mailpit-api-internal",
@@ -112,6 +150,7 @@
       "environment": "demo",
       "owner": "Development Lab",
       "criticality": "high",
+      "workloads": [],
       "probes": [
         {
           "id": "erpnet-ping-internal",

@@ -28,9 +28,9 @@
 | Sprint | Name | Status | Demonstration at review |
 | ---: | --- | --- | --- |
 | 0 | Foundation and delivery guardrails | Implemented locally; not deployed | Render the stack, validate probes, and show deployment plans without mutating a target |
-| 1 | Enterprise application shell | Implemented locally; ready for review | Navigate the approved enterprise shell using fixture data |
-| 1.1 | Portal packaging and lab deployment | Implemented locally; not deployed | Build and run the hardened fixture portal beside the monitoring stack, then review the reversible Cloudflare cutover |
-| 2 | Live deployment inventory | Planned | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
+| 1 | Enterprise application shell | Deployed with Sprint 1.1 | Navigate the approved enterprise shell using fixture data |
+| 1.1 | Portal packaging and lab deployment | Deployed and user-verified | Build and run the hardened fixture portal beside the monitoring stack, then review the reversible Cloudflare cutover |
+| 2 | Live deployment inventory | Deployed and user-verified | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
 | 3 | Traffic and performance | Planned | Inspect real request rate, errors, saturation, and latency graphs |
 | 4 | Infrastructure topology | Planned | Drill from an environment into workloads, nodes, and dependencies |
 | 5 | Alerts and incident operations | Planned | Triage, acknowledge, silence, and annotate a simulated incident |
@@ -123,7 +123,7 @@ Turn the approved mockup direction into a responsive enterprise web application 
 
 ### Status
 
-Implemented and tested locally. The production image, Compose service, guarded deployment path, automated verification, and rollback runbook are ready for review. The CPQ server and Cloudflare tunnel have not been changed.
+Implemented, deployed, tested, and user-verified before Sprint 2 began. The production image, Compose service, guarded deployment path, automated verification, and rollback runbook remain the Sprint 2 deployment baseline.
 
 ### Objective
 
@@ -196,6 +196,8 @@ Approve the portal port, resource limits, base-image pin, web security headers, 
 - Kubernetes deployment, registry promotion, multi-host availability, or independent failure domains; Sprint 9 owns cloud operational hardening.
 
 ## Sprint 2: Live deployment inventory
+
+Status: implemented and tested locally on 2026-08-12, then deployed, automatically verified, and human-tested through the production UI on 2026-08-13. The accepted deployment was operating in explicit partial mode with catalog and both Gatus sources available; the unavailable Kubernetes read-only credential remained visible, and mapped services were conservatively degraded rather than falsely healthy.
 
 ### Objective
 

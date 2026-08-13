@@ -44,6 +44,18 @@ class VantagePoint(StrEnum):
     EXTERNAL = "external"
 
 
+class WorkloadKind(StrEnum):
+    DEPLOYMENT = "Deployment"
+    POD = "Pod"
+
+
+@dataclass(frozen=True, slots=True)
+class KubernetesWorkload:
+    kind: WorkloadKind
+    namespace: str
+    name: str
+
+
 @dataclass(frozen=True, slots=True)
 class HttpProbe:
     probe_id: str
@@ -67,6 +79,7 @@ class MonitoredService:
     owner: str
     criticality: Criticality
     probes: tuple[HttpProbe, ...]
+    workloads: tuple[KubernetesWorkload, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,12 +133,13 @@ def _parse_service(raw_value: object, index: int) -> MonitoredService:
     raw = _object(raw_value, context)
     _require_exact_keys(
         raw,
-        {"id", "displayName", "kind", "environment", "owner", "criticality", "probes"},
+        {"id", "displayName", "kind", "environment", "owner", "criticality", "probes", "workloads"},
         context,
     )
     probes_raw = _list(raw["probes"], f"{context}.probes")
     if not probes_raw:
         raise CatalogValidationError(f"{context}.probes must contain at least one probe")
+    workloads_raw = _list(raw["workloads"], f"{context}.workloads")
     return MonitoredService(
         service_id=_identifier(raw["id"], f"{context}.id"),
         display_name=_nonempty_string(raw["displayName"], f"{context}.displayName"),
@@ -134,6 +148,21 @@ def _parse_service(raw_value: object, index: int) -> MonitoredService:
         owner=_nonempty_string(raw["owner"], f"{context}.owner"),
         criticality=_enum(Criticality, raw["criticality"], f"{context}.criticality"),
         probes=tuple(_parse_probe(item, context, probe_index) for probe_index, item in enumerate(probes_raw)),
+        workloads=tuple(
+            _parse_workload(item, context, workload_index)
+            for workload_index, item in enumerate(workloads_raw)
+        ),
+    )
+
+
+def _parse_workload(raw_value: object, service_context: str, index: int) -> KubernetesWorkload:
+    context = f"{service_context}.workloads[{index}]"
+    raw = _object(raw_value, context)
+    _require_exact_keys(raw, {"kind", "namespace", "name"}, context)
+    return KubernetesWorkload(
+        kind=_enum(WorkloadKind, raw["kind"], f"{context}.kind"),
+        namespace=_identifier(raw["namespace"], f"{context}.namespace"),
+        name=_identifier(raw["name"], f"{context}.name"),
     )
 
 

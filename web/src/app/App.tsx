@@ -18,14 +18,15 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
-import { createFixtureMonitoringProvider } from "../data/provider";
-import type { EnvironmentId, OverviewSnapshot, TimeRange } from "../data/types";
+import { createLiveMonitoringProvider } from "../data/provider";
+import type { EnvironmentId, MonitoringProvider, OverviewSnapshot, TimeRange } from "../data/types";
 import {
   DeploymentsPage,
   IncidentsPage,
   InfrastructurePage,
   OverviewPage,
   PerformancePage,
+  ServiceDetailPage,
   SettingsPage
 } from "./pages";
 
@@ -44,7 +45,7 @@ const primaryNavigation: readonly NavigationItem[] = [
   { label: "Settings", path: "/settings", icon: GearIcon }
 ];
 
-const provider = createFixtureMonitoringProvider();
+const liveProvider = createLiveMonitoringProvider();
 
 function CommandSearch({ onClose }: { readonly onClose: () => void }): React.JSX.Element {
   const [query, setQuery] = useState("");
@@ -89,7 +90,8 @@ function CommandSearch({ onClose }: { readonly onClose: () => void }): React.JSX
   );
 }
 
-function Sidebar({ open, onClose }: { readonly open: boolean; readonly onClose: () => void }): React.JSX.Element {
+function Sidebar({ open, onClose, snapshot }: { readonly open: boolean; readonly onClose: () => void; readonly snapshot: OverviewSnapshot | null }): React.JSX.Element {
+  const sourceCount = snapshot?.sources.filter((source) => source.availability === "available").length ?? 0;
   return (
     <aside className={`sidebar ${open ? "sidebar-open" : ""}`} aria-label="Primary navigation">
       <div className="brand-row">
@@ -119,8 +121,8 @@ function Sidebar({ open, onClose }: { readonly open: boolean; readonly onClose: 
         })}
       </nav>
       <div className="sidebar-status">
-        <div><span className="status-light" aria-hidden="true" /><strong>Collectors operational</strong></div>
-        <span>7 connected · 2 simulated</span>
+        <div><span className="status-light" aria-hidden="true" /><strong>{snapshot?.mode === "partial" ? "Collectors partial" : "Collectors operational"}</strong></div>
+        <span>{snapshot ? `${sourceCount}/${snapshot.sources.length} sources available` : "Checking sources"}</span>
       </div>
     </aside>
   );
@@ -140,7 +142,7 @@ function ErrorShell({ message }: { readonly message: string }): React.JSX.Elemen
   return <section className="error-shell" role="alert"><WarningOctagonIcon aria-hidden="true" size={28} /><h1>Monitoring shell unavailable</h1><p>{message}</p></section>;
 }
 
-export function App(): React.JSX.Element {
+export function App({ provider = liveProvider }: { readonly provider?: MonitoringProvider }): React.JSX.Element {
   const [environment, setEnvironment] = useState<EnvironmentId>("all");
   const [timeRange, setTimeRange] = useState<TimeRange>("1h");
   const [snapshot, setSnapshot] = useState<OverviewSnapshot | null>(null);
@@ -163,7 +165,7 @@ export function App(): React.JSX.Element {
         if (active) setError(cause instanceof Error ? cause.message : "Unknown monitoring provider error");
       });
     return () => { active = false; };
-  }, [environment, timeRange]);
+  }, [environment, provider, timeRange]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -193,7 +195,7 @@ export function App(): React.JSX.Element {
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to monitoring content</a>
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} snapshot={snapshot} />
       {sidebarOpen && <button className="sidebar-scrim" type="button" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <div className="workspace">
         <header className="topbar">
@@ -216,15 +218,20 @@ export function App(): React.JSX.Element {
             </div>
           </div>
         </header>
-        <div className="fixture-banner" role="status">
-          <span><CheckCircleIcon aria-hidden="true" size={15} weight="fill" />Fixture data</span>
-          <p>This shell is using deterministic Sprint 1 demo data. Nothing on this screen is live.</p>
+        <div className={`fixture-banner data-banner-${snapshot?.mode ?? "loading"}`} role="status">
+          <span>{snapshot?.mode === "partial" ? <WarningOctagonIcon aria-hidden="true" size={15} weight="fill" /> : <CheckCircleIcon aria-hidden="true" size={15} weight="fill" />}{snapshot?.mode === "fixture" ? "Fixture data" : snapshot?.mode === "partial" ? "Partial live inventory" : snapshot?.mode === "live" ? "Live inventory" : "Loading inventory"}</span>
+          <p>{snapshot?.mode === "fixture"
+            ? "This test shell uses deterministic Sprint 1 data."
+            : snapshot?.mode === "partial"
+              ? "Available sources stay live and unavailable sources are explicit. Infrastructure, performance, incidents, and settings remain fixture previews."
+              : "Overview, deployments, and service details use live read-only sources. Infrastructure, performance, incidents, and settings remain fixture previews."}</p>
           <small>{snapshot ? `Snapshot ${new Date(snapshot.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading snapshot"}</small>
         </div>
         <main id="main-content" tabIndex={-1}>
           {error ? <ErrorShell message={error} /> : routeSnapshot ? (
             <Routes>
               <Route path="/" element={<OverviewPage snapshot={routeSnapshot} />} />
+              <Route path="/services/:serviceId" element={<ServiceDetailPage snapshot={routeSnapshot} />} />
               <Route path="/deployments" element={<DeploymentsPage snapshot={routeSnapshot} />} />
               <Route path="/infrastructure" element={<InfrastructurePage />} />
               <Route path="/performance" element={<PerformancePage snapshot={routeSnapshot} />} />

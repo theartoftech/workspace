@@ -29,6 +29,49 @@ services:
       org.opencontainers.image.revision: ${PORTAL_BUILD_REVISION:-development}
     mem_limit: 128m
     cpus: 0.25
+    depends_on:
+      - inventory-api
+
+  inventory-api:
+    build:
+      context: ../../..
+      dockerfile: deploy/inventory-api/Dockerfile
+      args:
+        PORTAL_BUILD_REVISION: ${PORTAL_BUILD_REVISION:-development}
+    image: "workspace-monitor-inventory-api:${PORTAL_BUILD_REVISION:-development}"
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      INVENTORY_PORT: "3001"
+      CATALOG_PATH: /app/catalog/services.json
+      UPSTREAM_TIMEOUT_MS: "3000"
+      SOURCE_STALE_AFTER_SECONDS: "180"
+      KUBERNETES_API_URL: ${KUBERNETES_API_URL:-https://host.docker.internal:6443}
+      KUBERNETES_TOKEN_FILE: /run/secrets/kubernetes_inventory_token
+      KUBERNETES_TOOL_URL: "#kubernetes-api-no-browser-link"
+      NODE_EXTRA_CA_CERTS: /run/kubernetes-ca/server-ca.crt
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ${MONITORING_DATA_DIR}/runtime-secrets:/run/secrets:ro
+      - ${KUBERNETES_HOST_CA_FILE:-/var/lib/rancher/k3s/server/tls/server-ca.crt}:/run/kubernetes-ca/server-ca.crt:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
+    labels:
+      org.opencontainers.image.revision: ${PORTAL_BUILD_REVISION:-development}
+    mem_limit: 128m
+    cpus: 0.25
 
   prometheus:
     image: prom/prometheus:v3.13.1-distroless

@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,13 +27,26 @@ def run_script(*arguments: str, environment: dict[str, str] | None = None) -> su
         env=process_environment,
         check=False,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
         text=True,
+        timeout=30,
     )
 
 
 def write_executable(path: Path, source: str) -> None:
     path.write_text(source, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+class DeploymentTestHarnessTests(unittest.TestCase):
+    def test_script_runner_closes_stdin_and_enforces_a_timeout(self) -> None:
+        completed = subprocess.CompletedProcess(["bash"], 0, "", "")
+        with patch.object(subprocess, "run", return_value=completed) as mocked_run:
+            run_script("help")
+
+        call_options = mocked_run.call_args.kwargs
+        self.assertIs(call_options["stdin"], subprocess.DEVNULL)
+        self.assertEqual(call_options["timeout"], 30)
 
 
 class SingleHostComposeContractTests(unittest.TestCase):
@@ -50,6 +64,7 @@ class SingleHostComposeContractTests(unittest.TestCase):
             {
                 "prometheus",
                 "portal",
+                "inventory-api",
                 "grafana",
                 "blackbox-exporter",
                 "node-exporter",
@@ -72,8 +87,8 @@ class SingleHostComposeContractTests(unittest.TestCase):
         ):
             self.assertIn(image, compose)
         self.assertNotIn(":latest", compose)
-        self.assertEqual(compose.count("mem_limit:"), 8)
-        self.assertEqual(compose.count("cpus:"), 8)
+        self.assertEqual(compose.count("mem_limit:"), 9)
+        self.assertEqual(compose.count("cpus:"), 9)
 
     def test_operator_interfaces_bind_to_loopback_without_port_conflicts(self) -> None:
         compose = (STACK_DIR / "compose.yaml").read_text(encoding="utf-8")
@@ -131,6 +146,27 @@ class SingleHostComposeContractTests(unittest.TestCase):
 
 
 class PortalPackagingContractTests(unittest.TestCase):
+    def test_inventory_api_is_reproducible_unprivileged_and_not_host_exposed(self) -> None:
+        dockerfile = (ROOT / "deploy/inventory-api/Dockerfile").read_text(encoding="utf-8")
+        compose = (STACK_DIR / "compose.yaml").read_text(encoding="utf-8")
+        api = compose.split("  inventory-api:\n", maxsplit=1)[1].split("\n  prometheus:", maxsplit=1)[0]
+
+        self.assertRegex(dockerfile, r"FROM node:[^\s]+@sha256:[0-9a-f]{64} AS build")
+        self.assertIn("RUN npm ci --ignore-scripts", dockerfile)
+        self.assertIn("RUN npm run build:server", dockerfile)
+        self.assertIn("USER 10001:10001", dockerfile)
+        self.assertIn("server/src/main.js", dockerfile)
+        self.assertIn("dockerfile: deploy/inventory-api/Dockerfile", api)
+        self.assertIn('user: "10001:10001"', api)
+        self.assertIn("read_only: true", api)
+        self.assertIn("no-new-privileges:true", api)
+        self.assertIn("cap_drop:\n      - ALL", api)
+        self.assertNotIn("ports:", api)
+        self.assertIn("KUBERNETES_TOKEN_FILE: /run/secrets/kubernetes_inventory_token", api)
+        self.assertIn("runtime-secrets:/run/secrets:ro", api)
+        self.assertIn("mem_limit: 128m", api)
+        self.assertIn("cpus: 0.25", api)
+
     def test_portal_uses_a_reproducible_multi_stage_unprivileged_image(self) -> None:
         dockerfile = (PORTAL_DIR / "Dockerfile").read_text(encoding="utf-8")
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
@@ -163,6 +199,10 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("location = /healthz", nginx)
         self.assertIn('return 200 "healthy\\n"', nginx)
         self.assertIn("try_files $uri $uri/ /index.html", nginx)
+        self.assertIn("location /api/", nginx)
+        self.assertIn("proxy_pass http://inventory-api:3001", nginx)
+        self.assertIn("location /tools/gatus-internal/", nginx)
+        self.assertIn("location /tools/gatus-public-path/", nginx)
         self.assertIn("public, max-age=31536000, immutable", nginx)
         self.assertIn('default "no-store"', nginx)
         for header in (
@@ -201,6 +241,8 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("Container rollback", runbook)
         self.assertIn("Tunnel-origin rollback", runbook)
         self.assertIn("--no-build", runbook)
+        self.assertIn("workspace-monitor-inventory-api:<prior-revision>", runbook)
+        self.assertIn("inventory-api portal", runbook)
         self.assertIn("http://localhost:3100", runbook)
         self.assertIn("http://localhost:3000", runbook)
         self.assertIn("Cloudflare Access", runbook)
@@ -410,7 +452,10 @@ fi
 
             synchronized_paths = archive_contents.read_text(encoding="utf-8").splitlines()
             self.assertTrue(any(path.endswith("web/src/main.tsx") for path in synchronized_paths))
+            self.assertTrue(any(path.endswith("server/src/main.ts") for path in synchronized_paths))
+            self.assertTrue(any(path.endswith("catalog/services.json") for path in synchronized_paths))
             self.assertTrue(any(path.endswith("deploy/portal/Dockerfile") for path in synchronized_paths))
+            self.assertTrue(any(path.endswith("deploy/inventory-api/Dockerfile") for path in synchronized_paths))
             forbidden_parts = ("/.git/", "/node_modules/", "/dist/", "/coverage/", "/runtime/")
             for path in synchronized_paths:
                 normalized_path = f"/{path.removeprefix('./')}"
@@ -458,15 +503,18 @@ exit 1
         for portal_source in ("package.json", "package-lock.json", "web", "deploy/portal"):
             self.assertIn(portal_source, source)
 
-    def test_script_builds_portal_and_verifies_health_routes_and_fixture_disclosure(self) -> None:
+    def test_script_builds_live_portal_and_api_and_verifies_inventory(self) -> None:
         source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn("compose build --pull portal", source)
+        self.assertIn("compose build --pull inventory-api portal", source)
         self.assertNotIn("compose pull\n", source)
         self.assertIn('verify_http "Portal health" http://127.0.0.1:3100/healthz', source)
         for route in ("/", "/deployments", "/infrastructure", "/performance", "/incidents", "/settings"):
             self.assertIn(f'"{route}"', source)
-        self.assertIn("Nothing on this screen is live.", source)
+        self.assertIn("/api/v1/inventory?environment=all", source)
+        self.assertIn('"apiVersion":1', source)
+        self.assertIn("/tools/gatus-internal/api/v1/endpoints/statuses", source)
+        self.assertIn("Live inventory", source)
         self.assertIn("validate_portal_port", source)
         self.assertIn("PORTAL_BUILD_REVISION", source)
 
@@ -525,8 +573,12 @@ count=0
 count=$((count + 1))
 printf '%s' "$count" > "$MONITORING_CURL_COUNT"
 if (( count < 3 )); then exit 1; fi
-if [[ " $* " == *" http://127.0.0.1:3100/assets/"* ]]; then
-    printf 'Nothing on this screen is live.'
+if [[ " $* " == *"/tools/gatus-internal/api/v1/endpoints/statuses"* ]]; then
+    printf '[{"name":"cpq-demo-ready-internal"}]'
+elif [[ " $* " == *"/api/v1/inventory?environment=all"* ]]; then
+    printf '{"apiVersion":1,"services":[{"id":"cpq-demo"}]}'
+elif [[ " $* " == *" http://127.0.0.1:3100/assets/"* ]]; then
+    printf 'Live inventory'
 elif [[ " $* " == *" http://127.0.0.1:3100/"* && " $* " != *"/healthz"* ]]; then
     printf '<title>Workspace Monitor</title><script src="/assets/index-test.js"></script>'
 fi

@@ -4,12 +4,13 @@ import axe from "axe-core";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
+import { createFixtureMonitoringProvider } from "../data/provider";
 
 describe("application shell accessibility", () => {
   it("has no automatically detectable critical or serious violations", async () => {
     const { container } = render(
       <MemoryRouter initialEntries={["/"]}>
-        <App />
+        <App provider={createFixtureMonitoringProvider()} />
       </MemoryRouter>
     );
 

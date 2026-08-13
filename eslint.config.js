@@ -27,5 +27,22 @@ export default tseslint.config(
       "@typescript-eslint/restrict-template-expressions": ["error", { "allowNumber": true }],
       "react-refresh/only-export-components": ["warn", { "allowConstantExport": true }]
     }
+  },
+  {
+    extends: [js.configs.recommended, ...tseslint.configs.strictTypeChecked],
+    files: ["server/src/**/*.ts", "shared/**/*.ts"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: globals.node,
+      parserOptions: {
+        project: ["./tsconfig.server.json"],
+        tsconfigRootDir: import.meta.dirname
+      }
+    },
+    rules: {
+      "@typescript-eslint/no-confusing-void-expression": "off",
+      "@typescript-eslint/restrict-template-expressions": ["error", { "allowNumber": true }],
+      "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }]
+    }
   }
 );

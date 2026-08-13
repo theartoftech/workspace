@@ -18,6 +18,7 @@ The primary upskilling deployment is one Docker Compose stack on the same Ubuntu
 - Remote Kubernetes synchronization contains only the deployment script and Helm chart.
 - Remote Gatus synchronization contains only its script, Compose/config files, and non-secret example environment file.
 - Runtime `.env` files and SQLite databases are never transferred from the workstation or committed to Git.
+- Kubernetes bearer tokens are read only from a host-mounted runtime file; they are never placed in Compose environment variables or synchronized archives.
 
 ## Primary single-host lab profile
 
@@ -26,6 +27,7 @@ The CPQ server currently has Docker 29.1.3 and standalone `docker-compose` 5.3.1
 | Service | Host port |
 | --- | ---: |
 | Enterprise portal | 3100 |
+| Inventory API | No host binding; proxied at portal `/api/` |
 | Grafana | 3000 |
 | Prometheus | 9090 |
 | Blackbox Exporter | 9115 |
@@ -45,7 +47,9 @@ The plan synchronizes only credential-free sources. On the server, prepare runti
 ssh jhaynes@192.168.86.246
 mkdir -p "$HOME/workspace-monitor/runtime/lab-docker/secrets"
 mkdir -p "$HOME/workspace-monitor/runtime/lab-docker/data"
+mkdir -p "$HOME/workspace-monitor/runtime/lab-docker/data/runtime-secrets"
 chmod 700 "$HOME/workspace-monitor/runtime/lab-docker/secrets"
+chmod 755 "$HOME/workspace-monitor/runtime/lab-docker/data/runtime-secrets"
 cp "$HOME/workspace-monitor/release/deploy/compose/lab-observability/.env.example" \
   "$HOME/workspace-monitor/runtime/lab-docker/.env"
 chmod 600 "$HOME/workspace-monitor/runtime/lab-docker/.env"
@@ -60,6 +64,29 @@ MONITORING_ENV_FILE=/home/jhaynes/workspace-monitor/runtime/lab-docker/.env
 ```
 
 Set `MONITORING_UID` and `MONITORING_GID` from `id -u` and `id -g`. Create the Grafana password file with a password-manager-generated value, owned by that UID/GID, and mode `0640`. Grafana remains UID 472 and receives the monitoring host group as a supplementary group solely to read this file. Sprint 0 does not require SMTP or webhook credentials; notification delivery is deferred until the integration design is reviewed.
+
+### Optional live Kubernetes evidence
+
+Gatus inventory works without Kubernetes credentials. In that case, the portal deliberately reports `partial` mode and mapped workloads remain unknown. To enable Kubernetes evidence, first review `deploy/kubernetes/inventory-reader-rbac.yaml`. It grants only `get` on Deployments and Pods and binds that role only in the catalog namespaces `default` and `cpq-test`.
+
+Applying RBAC is a separate, explicit cluster mutation and is not performed by the deployment script:
+
+```sh
+cd "$HOME/workspace-monitor/release"
+kubectl apply -f deploy/kubernetes/inventory-reader-rbac.yaml
+kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory get deployment/application -n default
+kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory list deployments -n default
+```
+
+The first authorization check must return `yes`; the second must return `no`. Issue a bounded token and install it so only the inventory container UID can read it:
+
+```sh
+kubectl --namespace monitoring create token workspace-monitor-inventory --duration=168h | \
+  sudo install -o 10001 -g 10001 -m 0400 /dev/stdin \
+  /home/jhaynes/workspace-monitor/runtime/lab-docker/data/runtime-secrets/kubernetes_inventory_token
+```
+
+The Compose profile mounts the k3s server CA from `/var/lib/rancher/k3s/server/tls/server-ca.crt`; override `KUBERNETES_HOST_CA_FILE` only when the reviewed server path differs. Renew the token before expiry and restart only `inventory-api` so it rereads the file. An expired or rejected token becomes an explicit unavailable source and cannot turn workload health green.
 
 Then run the read-only preflight:
 
@@ -89,20 +116,20 @@ Read-only operations:
 
 ### Portal deployment and Cloudflare tunnel
 
-The deployment command creates an explicit credential-free source archive, tags the portal with its `candidate-<sha256>` content revision, verifies that digest on the server before replacing the release directory, and binds the portal to `127.0.0.1:3100`. It leaves Grafana running on `127.0.0.1:3000` and never changes Cloudflare configuration. Preflight rejects insufficient build capacity and an unrelated listener on port `3100`.
+The deployment command creates an explicit credential-free source archive, tags the portal and inventory API with the same `candidate-<sha256>` content revision, verifies that digest on the server before replacing the release directory, and binds only the portal to `127.0.0.1:3100`. It leaves Grafana running on `127.0.0.1:3000` and never changes Cloudflare configuration. Preflight rejects insufficient build capacity and an unrelated listener on port `3100`.
 
 Before Sprint 1.1 cutover, the user-managed tunnel continues to route `monitor.jefferyhaynes.net` to `http://localhost:3000` on the CPQ host. Grafana is configured with `https://monitor.jefferyhaynes.net` as its public root URL. Protect the hostname with Cloudflare Access before public use. Do not store tunnel tokens, credentials, account IDs, or Access policy secrets in this repository.
 
 The implemented deployment and operator-controlled cutover sequence is intentionally reversible:
 
-1. Deploy the portal container without changing Cloudflare.
-2. Verify `/healthz`, all primary routes, fixture disclosure, resource limits, and existing Grafana/monitoring health over loopback.
+1. Deploy the portal and inventory API containers without changing Cloudflare.
+2. Verify `/healthz`, `/api/v1/inventory`, all primary routes, live/partial disclosure, resource limits, and existing Grafana/monitoring health over loopback.
 3. Confirm that the Cloudflare Access policy is active for `monitor.jefferyhaynes.net`.
 4. Change the user-managed tunnel origin from `http://localhost:3000` to `http://localhost:3100`.
 5. Verify public TLS, Access enforcement, and portal navigation.
 6. If verification fails, restore the tunnel origin to `http://localhost:3000`; this tunnel rollback is independent of container rollback.
 
-The repository script automates steps 1 and 2 only. Steps 3–6 remain explicit operator actions. See [PORTAL_ROLLBACK.md](PORTAL_ROLLBACK.md) for the exact image and tunnel rollback procedures. The portal remains visibly fixture-backed after deployment.
+The repository script automates steps 1 and 2 only. Steps 3–6 remain explicit operator actions. See [PORTAL_ROLLBACK.md](PORTAL_ROLLBACK.md) for the exact image/API and tunnel rollback procedures. Live inventory always identifies partial and unavailable sources; preview-only routes retain their fixture disclosure.
 
 The public-path Gatus process runs on the same host. It validates DNS, TLS, reverse-proxy, and public URL behavior, but it cannot detect loss of the server, LAN, ISP, host Docker daemon, or host power independently.
 

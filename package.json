@@ -6,9 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:server": "tsc -p tsconfig.server.json",
     "typecheck": "tsc -b --pretty false",
-    "lint": "eslint web/src --max-warnings 0",
+    "lint": "eslint web/src server/src shared --max-warnings 0",
     "test": "vitest run",
+    "test:server": "vitest run --config vitest.server.config.ts",
+    "test:server:coverage": "vitest run --config vitest.server.config.ts --coverage",
     "test:coverage": "vitest run --coverage",
     "test:a11y": "vitest run web/src/app/App.a11y.test.tsx"
   },

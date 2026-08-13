@@ -29,10 +29,11 @@ import {
   XAxis,
   YAxis
 } from "recharts";
+import { Link, useParams } from "react-router-dom";
 
 import { StateGallery } from "../components/StateGallery";
 import { StatusBadge } from "../components/StatusBadge";
-import type { OverviewSnapshot, ServiceHealth } from "../data/types";
+import type { OverviewSnapshot } from "../data/types";
 
 interface SnapshotPageProps {
   readonly snapshot: OverviewSnapshot;
@@ -65,9 +66,6 @@ function PanelHeader({ title, meta }: { readonly title: string; readonly meta: s
         <h2>{title}</h2>
         <span>{meta}</span>
       </div>
-      <button className="icon-button subtle-button" type="button" aria-label={`Open ${title} detail`}>
-        <ArrowUpRightIcon aria-hidden="true" size={18} />
-      </button>
     </div>
   );
 }
@@ -97,7 +95,15 @@ function MetricCard({
   );
 }
 
-function ServiceTable({ services }: { readonly services: readonly ServiceHealth[] }): React.JSX.Element {
+type ServiceRow = OverviewSnapshot["services"][number];
+
+function formattedTimestamp(value: string | null): string {
+  if (value === null) return "No observation";
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? "Invalid source timestamp" : timestamp.toLocaleString();
+}
+
+function ServiceTable({ services }: { readonly services: readonly ServiceRow[] }): React.JSX.Element {
   const serviceIcons = {
     application: CloudIcon,
     identity: IdentificationCardIcon,
@@ -113,8 +119,8 @@ function ServiceTable({ services }: { readonly services: readonly ServiceHealth[
             <th scope="col">Service</th>
             <th scope="col">Status</th>
             <th scope="col">Environment</th>
-            <th scope="col">Latency</th>
-            <th scope="col">Uptime</th>
+            <th scope="col">Reachability</th>
+            <th scope="col">Endpoint</th>
             <th scope="col">Version</th>
             <th scope="col">Owner</th>
           </tr>
@@ -127,16 +133,16 @@ function ServiceTable({ services }: { readonly services: readonly ServiceHealth[
                 <div className="service-name-cell">
                   <span className={`service-icon service-icon-${service.kind}`}><ServiceIcon aria-hidden="true" size={17} /></span>
                   <div>
-                    <strong>{service.name}</strong>
-                    <span>{service.lastChecked}</span>
+                    <Link to={`/services/${service.id}`}><strong>{service.name}</strong></Link>
+                    <span>{formattedTimestamp(service.lastCheckedAt)}</span>
                   </div>
                 </div>
               </td>
-              <td><StatusBadge status={service.status} /></td>
+              <td><StatusBadge status={service.state} /></td>
               <td><span className="environment-chip">{service.environment}</span></td>
-              <td>{service.latencyMs} ms</td>
-              <td>{service.uptime.toFixed(2)}%</td>
-              <td><code>{service.version}</code></td>
+              <td><span className={`comparison comparison-${service.reachability.comparison}`}>{service.reachability.comparison.replace("-", " ")}</span></td>
+              <td><a className="endpoint-link" href={service.endpoint} target="_blank" rel="noreferrer">{service.endpoint}</a></td>
+              <td><code>{service.version ?? "Unavailable"}</code></td>
               <td>{service.owner}</td>
             </tr>;
           })}
@@ -147,117 +153,142 @@ function ServiceTable({ services }: { readonly services: readonly ServiceHealth[
 }
 
 export function OverviewPage({ snapshot }: SnapshotPageProps): React.JSX.Element {
-  const affected = snapshot.summary.degradedServices + snapshot.summary.criticalServices;
+  const affected = snapshot.summary.degraded + snapshot.summary.failing + snapshot.summary.unknown + snapshot.summary.stale;
+  const availableSources = snapshot.sources.filter((source) => source.availability === "available").length;
+  const disagreements = snapshot.services.filter((service) => service.reachability.comparison === "disagreement");
   return (
     <>
       <PageHeader
         eyebrow="Operations / Overview"
         title="Fleet overview"
-        description="Deployment health, availability, and capacity across the development lab."
-        action={<button className="secondary-button" type="button">Create view</button>}
+        description="Live catalog, reachability, and workload state across the development lab."
       />
 
       <section className="metrics-grid" aria-label="Fleet summary">
-        <MetricCard label="Services online" value={`${snapshot.summary.healthyServices}/${snapshot.summary.totalServices}`} note={`${affected} require attention`} tone={affected > 0 ? "warning" : "positive"} icon={CheckCircleIcon} />
-        <MetricCard label="Fleet uptime" value={`${snapshot.summary.uptime.toFixed(2)}%`} note="Target 99.90% · trailing 30d" tone="positive" icon={TrendUpIcon} />
-        <MetricCard label="Active incidents" value={String(snapshot.summary.activeIncidents)} note="1 critical · 1 monitoring" tone="danger" icon={WarningCircleIcon} />
-        <MetricCard label="Request volume" value="7.4M" note="+8.2% over prior period" icon={GaugeIcon} />
+        <MetricCard label="Services healthy" value={`${snapshot.summary.healthy}/${snapshot.summary.total}`} note={`${affected} require attention`} tone={affected > 0 ? "warning" : "positive"} icon={CheckCircleIcon} />
+        <MetricCard label="Failing" value={String(snapshot.summary.failing)} note={`${snapshot.summary.degraded} degraded · ${snapshot.summary.stale} stale`} tone={snapshot.summary.failing > 0 ? "danger" : "positive"} icon={WarningCircleIcon} />
+        <MetricCard label="Sources available" value={`${availableSources}/${snapshot.sources.length}`} note={snapshot.mode === "partial" ? "Partial evidence retained" : "All collectors current"} tone={snapshot.mode === "partial" ? "warning" : "positive"} icon={DatabaseIcon} />
+        <MetricCard label="Reachability conflicts" value={String(disagreements.length)} note="Internal vs public path" tone={disagreements.length > 0 ? "warning" : "positive"} icon={GlobeHemisphereWestIcon} />
       </section>
 
       <section className="overview-grid">
-        <article className="panel traffic-panel">
-          <PanelHeader title="Traffic & latency" meta="All monitored services · last 60 minutes" />
-          <div className="chart-legend" aria-hidden="true">
-            <span><i className="legend-cobalt" />Requests/min</span>
-            <span><i className="legend-amber" />p95 latency</span>
-          </div>
-          <div className="chart-frame" role="img" aria-label="Fixture traffic and p95 latency chart">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={snapshot.traffic} margin={{ top: 12, right: 8, left: -22, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="trafficFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#4f7cff" stopOpacity={0.42} />
-                    <stop offset="100%" stopColor="#4f7cff" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#25354a" vertical={false} />
-                <XAxis dataKey="time" stroke="#75869d" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
-                <YAxis stroke="#75869d" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
-                <Tooltip contentStyle={{ background: "#111e2f", border: "1px solid #31445e", borderRadius: 8 }} />
-                <Area type="monotone" dataKey="requests" stroke="#6b8fff" strokeWidth={2} fill="url(#trafficFill)" />
-                <Line type="monotone" dataKey="latency" stroke="#f2a65a" strokeWidth={2} dot={false} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </article>
-
-        <article className="panel health-panel">
-          <PanelHeader title="Health by environment" meta="Current fixture snapshot" />
-          <div className="environment-health-list">
-            {[
-              ["Demo", "2 services", "healthy"],
-              ["Test", "1 service", "degraded"],
-              ["Shared", "2 services", "critical"]
-            ].map(([name, count, status]) => (
-              <div className="environment-health-row" key={name}>
-                <div><strong>{name}</strong><span>{count}</span></div>
-                <StatusBadge status={status as "healthy" | "degraded" | "critical"} />
+        <article className="panel source-panel">
+          <PanelHeader title="Source freshness" meta={`Assembled ${formattedTimestamp(snapshot.generatedAt)}`} />
+          <div className="source-list">
+            {snapshot.sources.map((source) => (
+              <div className="source-row" key={source.source}>
+                <div><strong>{source.source.replaceAll("-", " ")}</strong><span>{formattedTimestamp(source.observedAt)}</span></div>
+                <span className={`source-availability source-${source.availability}`}>{source.availability}</span>
+                {source.message && <p>{source.message}</p>}
+                {source.toolUrl && !source.toolUrl.startsWith("#") && <a href={source.toolUrl} target="_blank" rel="noreferrer">Open source <ArrowUpRightIcon aria-hidden="true" size={14} /></a>}
               </div>
             ))}
           </div>
-          <div className="slo-callout">
-            <ShieldCheckIcon aria-hidden="true" size={22} />
-            <div><strong>4 of 5 SLOs met</strong><span>OAuth burn rate is 3.7× budget.</span></div>
+        </article>
+
+        <article className="panel reachability-panel">
+          <PanelHeader title="Reachability comparison" meta="Internal vs public-path probes" />
+          <div className="reachability-list">
+            {snapshot.services.filter((service) => service.reachability.comparison !== "not-configured").map((service) => (
+              <div className={`reachability-row comparison-${service.reachability.comparison}`} key={service.id}>
+                <Link to={`/services/${service.id}`}><strong>{service.name}</strong></Link>
+                <div><span>Internal</span>{service.reachability.internal ? <StatusBadge status={service.reachability.internal} /> : <em>Not observed</em>}</div>
+                <div><span>Public path</span>{service.reachability.external ? <StatusBadge status={service.reachability.external} /> : <em>Not observed</em>}</div>
+                <small>{service.reachability.comparison.replace("-", " ")}</small>
+              </div>
+            ))}
+            {snapshot.services.every((service) => service.reachability.comparison === "not-configured") && <p className="empty-panel-copy">No paired internal/public-path probes in this scope.</p>}
           </div>
         </article>
       </section>
 
-      <section className="lower-grid">
-        <article className="panel services-panel">
+      <section>
+        <article className="panel services-panel inventory-panel">
           <PanelHeader title="Service inventory" meta={`${snapshot.services.length} services in current scope`} />
           <ServiceTable services={snapshot.services} />
-        </article>
-        <article className="panel incidents-panel">
-          <PanelHeader title="Active incidents" meta="Dependency-aware triage" />
-          <div className="incident-list">
-            {snapshot.incidents.map((incident) => (
-              <button className="incident-row" type="button" key={incident.id}>
-                <span className={`severity severity-${incident.severity.toLowerCase()}`}>{incident.severity}</span>
-                <span className="incident-copy"><strong>{incident.title}</strong><span>{incident.service} · {incident.startedAt}</span></span>
-                <ArrowUpRightIcon aria-hidden="true" size={16} />
-              </button>
-            ))}
-          </div>
-          <button className="text-button" type="button">View incident command <ArrowUpRightIcon aria-hidden="true" size={15} /></button>
         </article>
       </section>
     </>
   );
 }
 
+export function ServiceDetailPage({ snapshot }: SnapshotPageProps): React.JSX.Element {
+  const { serviceId } = useParams<{ readonly serviceId: string }>();
+  const service = snapshot.services.find((item) => item.id === serviceId);
+  if (service === undefined) {
+    return <section className="error-shell" role="alert"><WarningCircleIcon aria-hidden="true" size={28} /><h1>Service not found</h1><p>The requested service is not in the current catalog scope.</p></section>;
+  }
+  return (
+    <>
+      <PageHeader
+        eyebrow={`Inventory / ${service.environment}`}
+        title={service.name}
+        description="Read-only service detail assembled from catalog, reachability probes, and mapped workloads."
+        action={<Link className="secondary-button" to="/">Back to inventory</Link>}
+      />
+      <section className="metrics-grid compact-metrics" aria-label="Service summary">
+        <MetricCard label="Current state" value={service.state} note={`Criticality: ${service.criticality}`} tone={service.state === "healthy" ? "positive" : service.state === "failing" ? "danger" : "warning"} icon={CheckCircleIcon} />
+        <MetricCard label="Last check" value={formattedTimestamp(service.lastCheckedAt)} note="Preserved source timestamp" icon={GaugeIcon} />
+        <MetricCard label="Version" value={service.version ?? "Unavailable"} note="Kubernetes image tag or digest" icon={GitBranchIcon} />
+        <MetricCard label="Owner" value={service.owner} note={service.environment} icon={UsersThreeIcon} />
+      </section>
+      <section className="overview-grid detail-grid">
+        <article className="panel">
+          <PanelHeader title="Reachability evidence" meta={service.endpoint} />
+          <div className="evidence-list">
+            {service.probes.map((probe) => (
+              <div className="evidence-row" key={`${probe.id}-${probe.vantagePoint}`}>
+                <div><strong>{probe.name}</strong><span>{probe.vantagePoint} · {formattedTimestamp(probe.checkedAt)}</span></div>
+                <StatusBadge status={probe.state} />
+                <span>{probe.latencyMs === null ? "No latency" : `${probe.latencyMs.toFixed(1)} ms`} · {probe.statusCode ?? "No HTTP status"}</span>
+                <a href={probe.sourceToolUrl} target="_blank" rel="noreferrer">Open source <ArrowUpRightIcon aria-hidden="true" size={14} /></a>
+              </div>
+            ))}
+            {service.probes.length === 0 && <p className="empty-panel-copy">No probe observations are available from the attempted sources.</p>}
+          </div>
+        </article>
+        <article className="panel">
+          <PanelHeader title="Workload evidence" meta={`${service.workloads.length} mapped observations`} />
+          <div className="evidence-list">
+            {service.workloads.map((workload) => (
+              <div className="evidence-row" key={`${workload.kind}:${workload.namespace}:${workload.name}`}>
+                <div><strong>{workload.name}</strong><span>{workload.kind} · {workload.namespace}</span></div>
+                <StatusBadge status={workload.state} />
+                <span>{workload.ready ?? "?"}/{workload.desired ?? "?"} ready · {workload.version ?? "version unavailable"}</span>
+                {!workload.sourceToolUrl.startsWith("#") && <a href={workload.sourceToolUrl} target="_blank" rel="noreferrer">Open source <ArrowUpRightIcon aria-hidden="true" size={14} /></a>}
+              </div>
+            ))}
+            {service.workloads.length === 0 && <p className="empty-panel-copy">No workload observation is mapped or Kubernetes is unavailable.</p>}
+          </div>
+        </article>
+      </section>
+      <article className="panel source-links-panel">
+        <PanelHeader title="Source tools" meta="Direct evidence links" />
+        <div className="source-links">
+          {service.sourceLinks.map((link) => <a href={link.url} target="_blank" rel="noreferrer" key={link.url}>{link.label}<ArrowUpRightIcon aria-hidden="true" size={15} /></a>)}
+          {service.sourceLinks.length === 0 && <p className="empty-panel-copy">No source tool link is available for this service.</p>}
+        </div>
+      </article>
+    </>
+  );
+}
+
 export function DeploymentsPage({ snapshot }: SnapshotPageProps): React.JSX.Element {
+  const workloads = snapshot.services.flatMap((service) => service.workloads);
+  const ready = workloads.filter((workload) => workload.state === "healthy").length;
+  const versions = new Set(snapshot.services.map((service) => service.version).filter((version): version is string => version !== null));
   return (
     <>
       <PageHeader eyebrow="Operations / Deployments" title="Deployments" description="Release posture, ownership, and runtime status across every lab environment." action={<button className="secondary-button" type="button">Compare releases</button>} />
       <section className="metrics-grid compact-metrics" aria-label="Deployment summary">
-        <MetricCard label="Running workloads" value="18" note="17 ready · 1 pending" tone="warning" icon={StackIcon} />
-        <MetricCard label="Clusters" value="1" note="cpqserver · k3s" tone="positive" icon={HardDrivesIcon} />
-        <MetricCard label="Last deployment" value="42m" note="CPQ Demo · v4.12.1" icon={GitBranchIcon} />
-        <MetricCard label="Change failure rate" value="3.2%" note="Trailing 30 days" tone="positive" icon={TrendUpIcon} />
+        <MetricCard label="Mapped workloads" value={String(workloads.length)} note={`${ready} healthy · ${workloads.length - ready} attention/unknown`} tone={ready === workloads.length ? "positive" : "warning"} icon={StackIcon} />
+        <MetricCard label="Services" value={String(snapshot.summary.total)} note={`${snapshot.summary.healthy} healthy`} tone={snapshot.summary.failing > 0 ? "danger" : "positive"} icon={HardDrivesIcon} />
+        <MetricCard label="Versions observed" value={String(versions.size)} note="From live workload images" icon={GitBranchIcon} />
+        <MetricCard label="Inventory freshness" value={snapshot.lastObservedAt ? formattedTimestamp(snapshot.lastObservedAt) : "Unavailable"} note="Source timestamp" tone={snapshot.lastObservedAt ? "positive" : "warning"} icon={TrendUpIcon} />
       </section>
       <article className="panel">
-        <PanelHeader title="Release inventory" meta="Fixture deployment metadata" />
+        <PanelHeader title="Release inventory" meta="Catalog and Kubernetes workload evidence" />
         <ServiceTable services={snapshot.services} />
-      </article>
-      <article className="panel dependency-chain-panel">
-        <PanelHeader title="Selected dependency chain" meta="CPQ Demo · demo environment" />
-        <div className="dependency-chain" aria-label="CPQ Demo dependency chain">
-          {["Cloudflare edge", "CPQ Demo", "OAuth / Keycloak", "PostgreSQL", "ERPNext"].map((node, index) => (
-            <div className="dependency-node" key={node}>
-              <span>{index + 1}</span><strong>{node}</strong><small>{index === 2 ? "Degraded path" : "Healthy"}</small>
-            </div>
-          ))}
-        </div>
       </article>
     </>
   );

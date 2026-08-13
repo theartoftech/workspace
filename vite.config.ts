@@ -6,6 +6,17 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     allowedHosts: ["terminal.local"],
+    proxy: {
+      "/api": "http://127.0.0.1:3001",
+      "/tools/gatus-internal": {
+        target: "http://127.0.0.1:8085",
+        rewrite: (path) => path.replace(/^\/tools\/gatus-internal/u, "")
+      },
+      "/tools/gatus-public-path": {
+        target: "http://127.0.0.1:8186",
+        rewrite: (path) => path.replace(/^\/tools\/gatus-public-path/u, "")
+      }
+    }
   },
   build: {
     rollupOptions: {

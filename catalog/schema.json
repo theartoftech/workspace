@@ -21,7 +21,7 @@
     "service": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "displayName", "kind", "environment", "owner", "criticality", "probes"],
+      "required": ["id", "displayName", "kind", "environment", "owner", "criticality", "probes", "workloads"],
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
         "displayName": { "type": "string", "minLength": 1 },
@@ -33,7 +33,21 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/$defs/probe" }
+        },
+        "workloads": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workload" }
         }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "namespace", "name"],
+      "properties": {
+        "kind": { "enum": ["Deployment", "Pod"] },
+        "namespace": { "$ref": "#/$defs/identifier" },
+        "name": { "$ref": "#/$defs/identifier" }
       }
     },
     "probe": {

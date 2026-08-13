@@ -1,71 +1,39 @@
-import type { IncidentSummary, ServiceHealth, TrafficPoint } from "./types";
+import type { HealthState, ServiceInventory } from "../../../shared/inventory";
+import type { IncidentSummary, TrafficPoint } from "./types";
 
-export const serviceFixtures: readonly ServiceHealth[] = [
-  {
-    id: "cpq-demo",
-    name: "CPQ Demo",
-    kind: "application",
-    environment: "demo",
-    status: "healthy",
-    uptime: 99.98,
-    latencyMs: 184,
-    requestRate: 42.8,
-    version: "v4.12.1",
-    owner: "Platform Engineering",
-    lastChecked: "18 sec ago"
-  },
-  {
-    id: "cpq-test",
-    name: "CPQ Test",
-    kind: "application",
-    environment: "test",
-    status: "degraded",
-    uptime: 99.82,
-    latencyMs: 426,
-    requestRate: 11.4,
-    version: "v4.13.0-rc2",
-    owner: "CPQ Enablement",
-    lastChecked: "24 sec ago"
-  },
-  {
-    id: "oauth",
-    name: "OAuth / Keycloak",
-    kind: "identity",
-    environment: "shared",
-    status: "critical",
-    uptime: 98.91,
-    latencyMs: 812,
-    requestRate: 17.2,
-    version: "26.3.2",
-    owner: "Identity Services",
-    lastChecked: "12 sec ago"
-  },
-  {
-    id: "mailpit",
-    name: "Mailpit",
-    kind: "mail",
-    environment: "shared",
-    status: "healthy",
-    uptime: 100,
-    latencyMs: 38,
-    requestRate: 2.8,
-    version: "v1.27.4",
-    owner: "Developer Experience",
-    lastChecked: "41 sec ago"
-  },
-  {
-    id: "erpnet",
-    name: "ERPNext",
-    kind: "erp",
-    environment: "demo",
-    status: "healthy",
-    uptime: 99.96,
-    latencyMs: 246,
-    requestRate: 8.7,
-    version: "v15.72.3",
-    owner: "Business Systems",
-    lastChecked: "31 sec ago"
-  }
+function fixtureService(
+  id: string,
+  name: string,
+  kind: ServiceInventory["kind"],
+  environment: ServiceInventory["environment"],
+  state: HealthState,
+  endpoint: string,
+  version: string
+): ServiceInventory {
+  return {
+    id,
+    name,
+    kind,
+    environment,
+    state,
+    endpoint,
+    version,
+    owner: "Development Lab",
+    criticality: state === "failing" ? "critical" : "medium",
+    lastCheckedAt: "2026-08-12T15:14:42Z",
+    reachability: { internal: state, external: null, comparison: "not-configured" },
+    probes: [],
+    workloads: [],
+    sourceLinks: []
+  };
+}
+
+export const serviceFixtures: readonly ServiceInventory[] = [
+  fixtureService("cpq-demo", "CPQ Demo", "application", "demo", "healthy", "https://demo.example.test/ready", "v4.12.1"),
+  fixtureService("cpq-test", "CPQ Test", "application", "test", "degraded", "https://test.example.test/ready", "v4.13.0-rc2"),
+  fixtureService("oauth", "OAuth / Keycloak", "identity", "shared", "failing", "https://oauth.example.test/", "26.3.2"),
+  fixtureService("mailpit", "Mailpit", "mail", "shared", "healthy", "https://mail.example.test/", "v1.27.4"),
+  fixtureService("erpnet", "ERPNext", "erp", "demo", "healthy", "https://erp.example.test/", "v15.72.3")
 ];
 
 export const incidentFixtures: readonly IncidentSummary[] = [

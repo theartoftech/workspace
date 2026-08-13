@@ -1,4 +1,4 @@
-import { CheckCircleIcon, QuestionIcon, WarningCircleIcon, XCircleIcon } from "@phosphor-icons/react";
+import { CheckCircleIcon, PauseCircleIcon, QuestionIcon, TimerIcon, WarningCircleIcon, XCircleIcon } from "@phosphor-icons/react";
 
 import type { HealthStatus } from "../data/types";
 
@@ -10,8 +10,10 @@ interface StatusBadgeProps {
 const labels: Readonly<Record<HealthStatus, string>> = {
   healthy: "Healthy",
   degraded: "Degraded",
-  critical: "Critical",
-  unknown: "Unknown"
+  failing: "Failing",
+  unknown: "Unknown",
+  paused: "Paused",
+  stale: "Stale"
 };
 
 export function StatusBadge({ status, compact = false }: StatusBadgeProps): React.JSX.Element {
@@ -19,9 +21,13 @@ export function StatusBadge({ status, compact = false }: StatusBadgeProps): Reac
     ? CheckCircleIcon
     : status === "degraded"
       ? WarningCircleIcon
-      : status === "critical"
+      : status === "failing"
         ? XCircleIcon
-        : QuestionIcon;
+        : status === "paused"
+          ? PauseCircleIcon
+          : status === "stale"
+            ? TimerIcon
+            : QuestionIcon;
 
   return (
     <span className={`status-badge status-${status}`}>

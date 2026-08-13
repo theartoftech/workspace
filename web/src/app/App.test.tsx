@@ -4,11 +4,15 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
+import { createFixtureMonitoringProvider } from "../data/provider";
+import type { MonitoringProvider } from "../data/types";
+
+const fixtureProvider = createFixtureMonitoringProvider();
 
 function renderApp(route = "/"): void {
   render(
     <MemoryRouter initialEntries={[route]}>
-      <App />
+      <App provider={fixtureProvider} />
     </MemoryRouter>
   );
 }
@@ -33,6 +37,42 @@ describe("enterprise application shell", () => {
 
     await user.click(screen.getByRole("link", { name: "Performance" }));
     expect(await screen.findByRole("heading", { name: "Performance & capacity" })).toBeInTheDocument();
+  });
+
+  it("opens a catalog-driven service detail view", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByRole("link", { name: "CPQ Demo" }));
+    expect(await screen.findByRole("heading", { name: "CPQ Demo" })).toBeInTheDocument();
+    expect(screen.getByText("Reachability evidence")).toBeInTheDocument();
+    expect(screen.getByText("Workload evidence")).toBeInTheDocument();
+  });
+
+  it("shows partial source evidence and internal/public disagreement", async () => {
+    const partialProvider: MonitoringProvider = {
+      async getOverview(environment, timeRange) {
+        const fixture = await fixtureProvider.getOverview(environment, timeRange);
+        return {
+          ...fixture,
+          mode: "partial",
+          services: fixture.services.map((service) => service.id === "cpq-demo" ? {
+            ...service,
+            state: "failing",
+            reachability: { internal: "healthy", external: "failing", comparison: "disagreement" }
+          } : service),
+          sources: [
+            { source: "catalog", availability: "available", observedAt: null, toolUrl: null, message: null },
+            { source: "kubernetes", availability: "unavailable", observedAt: null, toolUrl: null, message: "Read-only credential unavailable" }
+          ]
+        };
+      }
+    };
+    render(<MemoryRouter><App provider={partialProvider} /></MemoryRouter>);
+
+    expect(await screen.findByText("Partial live inventory")).toBeInTheDocument();
+    expect(screen.getByText("Read-only credential unavailable")).toBeInTheDocument();
+    expect(screen.getAllByText("disagreement").length).toBeGreaterThan(0);
   });
 
   it("opens command search with the keyboard and navigates from a result", async () => {
@@ -98,7 +138,7 @@ describe("enterprise application shell", () => {
   it("renders infrastructure and rejects unknown routes explicitly", async () => {
     const { unmount } = render(
       <MemoryRouter initialEntries={["/infrastructure"]}>
-        <App />
+        <App provider={fixtureProvider} />
       </MemoryRouter>
     );
     expect(await screen.findByRole("heading", { name: "Infrastructure" })).toBeInTheDocument();
