@@ -1,8 +1,8 @@
 # Development Lab Observability
 
-This standalone repository is the reviewable monitoring application for the CPQ development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprint 3 adds bounded, read-only Prometheus performance queries and live traffic, error, latency, and saturation graphs to the Sprint 2 inventory portal. Sprint 2 was deployed and passed automated verification and human UI acceptance on 2026-08-13; Sprint 3 is implemented locally and deployment remains an explicit operator action.
+This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 4 are complete and deployed: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, and read-only Kubernetes topology. Sprint 4 passed automated deployment verification and human UI acceptance on 2026-08-14.
 
-Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 0 covers the monitoring foundation, Sprint 1 and 1.1 provide the portal and guarded lab deployment, and Sprint 2 implements live deployment inventory.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 5, alerts and incident operations, is the next planned increment and has not been authorized for implementation.
 
 ## Foundation scope
 
@@ -41,7 +41,7 @@ Overview, deployments, service detail, and infrastructure topology use live inve
 - `web/src` — enterprise shell, live and fixture providers, service detail, reusable components, and UI tests.
 - `documentation/adr` — architecture decisions for review before later live-data integration.
 
-## Review the Sprint 3 performance workspace
+## Run the current workspace locally
 
 Build and run the read-only API against the already deployed lab Gatus endpoints:
 
@@ -74,11 +74,11 @@ npm run lint
 npm run build
 ```
 
-The live route set includes Overview, Deployments, Infrastructure, Performance, and `/services/<catalog-id>`. Incidents and Settings retain explicit preview data. The API accepts only GET/HEAD; topology inventory is server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives infrastructure credentials or arbitrary PromQL access.
+The live route set includes Overview, Deployments, Infrastructure, Performance, and `/services/<catalog-id>`. Incident interactions remain session-only and reset on reload; Settings remains a preview. The API accepts only GET/HEAD; topology inventory is server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives infrastructure credentials or arbitrary PromQL access.
 
-## Acceptance criteria
+## Verification criteria
 
-The slice is ready to deploy when all of these are true:
+The deployed foundation remains acceptable only while all of these are true:
 
 1. `python3 scripts/validate_catalog.py` reports six services, seven internal probes, and three external probes.
 2. `python3 -m unittest discover -s tests -v` passes.

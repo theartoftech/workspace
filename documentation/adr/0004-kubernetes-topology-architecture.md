@@ -1,11 +1,11 @@
 # ADR 0004: Bounded read-only Kubernetes topology
 
-- Status: Accepted
+- Status: Accepted, deployed, and user-verified on 2026-08-14
 - Date: 2026-08-14
 
 ## Decision
 
-Workspace Monitor exposes `GET /api/v1/topology?environment=<all|demo|test|shared>`. The server derives the permitted namespaces from catalog workload mappings, reads a fixed allow-list of Kubernetes resource types, caps each upstream list and the assembled response, and never accepts arbitrary Kubernetes paths, selectors, or queries from the browser.
+Workspace Monitor exposes `GET /api/v1/topology?environment=<all|demo|test|portfolio>`. The operator environment selector offers Demo / Prod (`demo`), Test (`test`), Portfolio (`portfolio`), and all environments (`all`). Shared infrastructure remains an internal catalog classification included in applicable scopes, not a separately selectable operator environment. The server derives the permitted namespaces from catalog workload mappings, reads a fixed allow-list of Kubernetes resource types, caps each upstream list and the assembled response, and never accepts arbitrary Kubernetes paths, selectors, or queries from the browser.
 
 The response normalizes Nodes, Namespaces, Deployments, StatefulSets, Pods, Services, PersistentVolumeClaims, and Ingresses. It also attaches at most five recent events per object and emits catalog workload, dependency, observer, and pod scheduling edges. Crash loops, pending scheduling, failed mounts, restarts, node pressure, and unbound storage remain separate issue codes instead of collapsing into one degraded label.
 

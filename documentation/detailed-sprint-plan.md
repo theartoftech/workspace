@@ -27,13 +27,13 @@
 
 | Sprint | Name | Status | Demonstration at review |
 | ---: | --- | --- | --- |
-| 0 | Foundation and delivery guardrails | Implemented locally; not deployed | Render the stack, validate probes, and show deployment plans without mutating a target |
+| 0 | Foundation and delivery guardrails | Complete and deployed | Render the stack, validate probes, and show deployment plans without mutating a target |
 | 1 | Enterprise application shell | Deployed with Sprint 1.1 | Navigate the approved enterprise shell using fixture data |
 | 1.1 | Portal packaging and lab deployment | Deployed and user-verified | Build and run the hardened fixture portal beside the monitoring stack, then review the reversible Cloudflare cutover |
 | 2 | Live deployment inventory | Deployed and user-verified | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
-| 3 | Traffic and performance | Implemented locally; not deployed | Inspect real request rate, errors, saturation, and latency graphs |
-| 4 | Infrastructure topology | Implemented locally | Drill from an environment into workloads, nodes, and dependencies |
-| 5 | Alerts and incident operations | Planned | Triage, acknowledge, silence, and annotate a simulated incident |
+| 3 | Traffic and performance | Complete, deployed, and user-verified | Inspect real request rate, errors, saturation, and latency graphs |
+| 4 | Infrastructure topology | Complete, deployed, and user-verified | Drill from an environment into workloads, nodes, and dependencies |
+| 5 | Alerts and incident operations | Planned | Persist, triage, acknowledge, silence, declare, and resolve alert-driven incidents |
 | 6 | Logs and event correlation | Planned | Move from a failed service to relevant logs and Kubernetes events |
 | 7 | Enterprise identity and access | Planned | Sign in through OIDC and verify role-scoped actions and audit records |
 | 8 | Safe synthetic journeys | Planned | Run non-destructive CPQ/OAuth/Mailpit/ERPNet journeys and see step diagnostics |
@@ -43,7 +43,7 @@
 
 ### Status
 
-Implemented and tested locally. No cluster or Gatus host has been changed.
+Complete, deployed as the current lab monitoring foundation, and verified.
 
 ### Objective
 
@@ -56,7 +56,7 @@ Establish a dependable monitoring substrate and a guarded, repeatable path for r
 - Pinned `kube-prometheus-stack` Helm chart retained as the future cloud deployment path.
 - One direct CPQ demo Prometheus scrape.
 - Internal Gatus checks and a clearly labeled same-host public-path simulation.
-- Status and metrics collection without a mandatory notification integration; email and webhook delivery are deferred to the incident workflow sprint.
+- Status and metrics collection without a mandatory notification integration; delivery remains deferred until its destinations and credential workflow are explicitly approved.
 - Single-host Docker, Kubernetes, and independent Gatus deployment scripts with plan, preflight, deploy, status, and verify boundaries.
 - Environment and secret preparation runbook.
 
@@ -197,7 +197,7 @@ Approve the portal port, resource limits, base-image pin, web security headers, 
 
 ## Sprint 2: Live deployment inventory
 
-Status: implemented and tested locally on 2026-08-12, then deployed, automatically verified, and human-tested through the production UI on 2026-08-13. The accepted deployment was operating in explicit partial mode with catalog and both Gatus sources available; the unavailable Kubernetes read-only credential remained visible, and mapped services were conservatively degraded rather than falsely healthy.
+Status: implemented and tested locally on 2026-08-12, then deployed, automatically verified, and human-tested through the production UI on 2026-08-13. The initial accepted deployment operated in explicit partial mode. The current deployment has catalog, both Gatus collectors, Kubernetes inventory, and Prometheus evidence available; all six catalog services were healthy during final Sprint 4 acceptance.
 
 ### Objective
 
@@ -232,7 +232,7 @@ Replace overview fixtures with a trustworthy, read-only deployment inventory and
 
 ### Status
 
-Implemented and tested locally on 2026-08-13. The Prometheus adapter, API, performance workspace, Compose wiring, and deployment verification are ready for review; no Sprint 3 deployment has been performed.
+Complete, deployed, automatically verified, and human-tested. The live performance workspace uses the bounded Prometheus adapter and includes Portfolio request totals and request rate.
 
 ### Objective
 
@@ -257,6 +257,10 @@ Add real Prometheus-backed traffic, error, latency, and resource visualizations.
 
 ## Sprint 4: Infrastructure topology
 
+### Status
+
+Complete, deployed, automatically verified, and human-tested on 2026-08-14. Acceptance covered three namespaces, one ready node, 14 healthy workloads, 38 returned resources, environment filtering, resource search and details, and service-to-workload deep links.
+
 ### Objective
 
 Let operators understand how deployments map to clusters, namespaces, workloads, pods, nodes, storage, and dependencies.
@@ -275,9 +279,13 @@ Let operators understand how deployments map to clusters, namespaces, workloads,
 - Missing mappings are shown explicitly and can be corrected in catalog metadata.
 - Crash loops, pending pods, failed mounts, and node pressure have distinct explanations.
 - Large inventories remain searchable and usable without rendering every object at once.
-- Kubernetes access remains read-only and namespace/label constrained.
+- Kubernetes access remains read-only, fixed-resource allow-listed, and namespace-bounded.
 
 ## Sprint 5: Alerts and incident operations
+
+### Status
+
+Planned; implementation requires explicit authorization. Incidents currently use session-only UI state and reset on reload. Notification destinations, credential storage, and the trusted source of operator identity remain design decisions rather than assumed integrations.
 
 ### Objective
 
@@ -285,19 +293,38 @@ Provide a focused operational workflow for active problems without becoming a fu
 
 ### Deliverables
 
+- Persistent incident storage and a bounded incident API.
+- Live alert ingestion or server-owned alert evaluation with explicit source health.
 - Active and resolved alert inbox.
 - Severity, owner, environment, source, start time, duration, and related-service filters.
-- Acknowledge, silence, maintenance-window, and annotation workflows.
-- Email/webhook delivery visibility and failure diagnostics.
-- Incident timeline assembled from monitoring events and operator annotations.
+- Persistent acknowledgement, declaration, resolution, silence, maintenance-window, and annotation workflows.
+- Runbook associations and an append-only audit history.
+- Incident timeline assembled from monitoring events, state transitions, and operator annotations.
+- Notification destination and credential-handling design; no delivery channel is assumed before approval.
 
 ### Acceptance criteria
 
-- Alert state changes require confirmation, actor identity, reason, and audit record.
-- Silence scope and expiration are shown before submission.
-- A failed notification delivery is visible and does not mark the incident resolved.
-- Duplicate alerts are grouped without losing source evidence.
-- Simulated alert/resolution sequences pass deterministic end-to-end tests.
+- An acknowledged, declared, or resolved incident and its audit history survive an application restart without duplication or loss.
+- Every state change validates the current state, requires confirmation, actor identity, and reason, and writes exactly one timestamped audit record.
+- Invalid, repeated, stale, or out-of-order transitions fail explicitly and do not partially mutate incident or audit state.
+- Silence scope and expiration are shown before submission; expired silences stop suppressing alerts without erasing their history.
+- Duplicate alerts are grouped without losing per-source evidence, and a failed alert source cannot produce a false resolved or healthy state.
+- Missing notification configuration is explicit. If delivery is later approved, delivery failure remains visible and never marks an incident resolved.
+- Representative alert, acknowledgement, silence-expiry, declaration, resolution, restart, duplicate-delivery, malformed-input, and partial-source sequences pass deterministic tests.
+- Server coverage remains at least 90%, including persistence failures and invalid transition branches.
+
+### Failure modes to test
+
+- Incident storage is unavailable, read-only, full, corrupt, or at an unsupported schema version.
+- The process stops between an incident transition and its audit write; recovery must not leave one without the other.
+- The same alert is delivered repeatedly, or resolution arrives before firing evidence because of retry or clock skew.
+- Two operators submit conflicting transitions from stale incident versions.
+- Actor identity is absent, malformed, or supplied through an untrusted header.
+- A silence is overbroad, has no bounded expiration, expires during downtime, or is evaluated with a skewed clock.
+- One alert source times out or returns malformed or oversized data while other sources remain valid.
+- Runbook metadata points to an unknown service, unsafe URL, missing target, or stale association.
+- Notification configuration is absent, rejected, or unavailable; credentials or sensitive destination data must not enter API responses, logs, audit records, or committed files.
+- Unsupported methods, oversized fields, invalid filters, and unbounded history requests are rejected without partial mutation.
 
 ## Sprint 6: Logs and event correlation
 

@@ -1,6 +1,6 @@
 # ADR 0003: Sprint 3 Prometheus performance architecture
 
-- Status: Accepted locally; deployment pending
+- Status: Accepted, deployed, and user-verified on 2026-08-14
 - Date: 2026-08-13
 
 ## Context
