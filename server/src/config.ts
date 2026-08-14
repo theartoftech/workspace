@@ -10,6 +10,11 @@ export interface KubernetesRuntimeConfig {
   readonly concurrency: number;
 }
 
+export interface PrometheusRuntimeConfig {
+  readonly apiUrl: string;
+  readonly concurrency: number;
+}
+
 export interface RuntimeConfig {
   readonly port: number;
   readonly catalogPath: string;
@@ -18,6 +23,7 @@ export interface RuntimeConfig {
   readonly gatusInternal: GatusRuntimeConfig;
   readonly gatusPublicPath: GatusRuntimeConfig;
   readonly kubernetes: KubernetesRuntimeConfig;
+  readonly prometheus: PrometheusRuntimeConfig;
 }
 
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -64,6 +70,10 @@ export function parseRuntimeConfig(environment: Environment): RuntimeConfig {
     gatusPublicPath: {
       apiUrl: httpUrl(environment, "GATUS_PUBLIC_PATH_API_URL", "http://gatus-public-path:8080/api/v1/endpoints/statuses"),
       toolUrl: nonempty(environment, "GATUS_PUBLIC_PATH_TOOL_URL", "/tools/gatus-public-path/api/v1/endpoints/statuses")
+    },
+    prometheus: {
+      apiUrl: httpUrl(environment, "PROMETHEUS_API_URL", "http://prometheus:9090"),
+      concurrency: integer(environment, "PROMETHEUS_CONCURRENCY", 4, 1, 8)
     },
     kubernetes: {
       apiUrl: httpUrl(environment, "KUBERNETES_API_URL", "https://host.docker.internal:6443"),

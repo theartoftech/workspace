@@ -495,14 +495,28 @@ verify_portal_routes() {
     bundle="$(fetch_http "Portal application asset" "http://127.0.0.1:3100${asset_path}")"
     grep -Fq 'Live inventory' <<< "$bundle" || \
         fail "Portal bundle does not contain the required live-inventory disclosure."
+    grep -Fq 'Prometheus telemetry' <<< "$bundle" || \
+        fail "Portal bundle does not contain the required Prometheus performance interface."
 
     local inventory
     inventory="$(fetch_http "Inventory API" "http://127.0.0.1:3100/api/v1/inventory?environment=all")"
     grep -Fq '"apiVersion":1' <<< "$inventory" || fail "Inventory API response has no supported API version."
     grep -Fq '"id":"cpq-demo"' <<< "$inventory" || fail "Inventory API response is missing CPQ Demo."
+    grep -Fq '"id":"portfolio"' <<< "$inventory" || fail "Inventory API response is missing the portfolio site."
+    local performance
+    performance="$(fetch_http "Performance API" "http://127.0.0.1:3100/api/v1/performance?environment=demo&service=cpq-demo&range=1h")"
+    grep -Fq '"apiVersion":1' <<< "$performance" || fail "Performance API response has no supported API version."
+    grep -Fq '"serviceId":"cpq-demo"' <<< "$performance" || fail "Performance API response did not retain the selected service."
+    grep -Fq '"id":"request-rate"' <<< "$performance" || fail "Performance API response is missing request-rate telemetry."
+    local portfolio_performance
+    portfolio_performance="$(fetch_http "Portfolio performance API" "http://127.0.0.1:3100/api/v1/performance?environment=demo&service=portfolio&range=1h")"
+    grep -Fq '"serviceId":"portfolio"' <<< "$portfolio_performance" || fail "Performance API response did not retain the portfolio service."
+    grep -Eq '"id":"request-total"[^}]*"status":"ok"' <<< "$portfolio_performance" || \
+        fail "Portfolio request-total telemetry is unavailable; deploy the private Nginx exporter before the monitoring stack."
     local source_evidence
     source_evidence="$(fetch_http "Internal Gatus evidence proxy" "http://127.0.0.1:3100/tools/gatus-internal/api/v1/endpoints/statuses")"
     grep -Fq 'cpq-demo-ready-internal' <<< "$source_evidence" || fail "Internal Gatus evidence proxy is missing CPQ Demo."
+    grep -Fq 'portfolio-home-internal' <<< "$source_evidence" || fail "Internal Gatus evidence proxy is missing the portfolio site."
 }
 
 verify_portal_container_health() {

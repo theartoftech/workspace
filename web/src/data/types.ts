@@ -6,9 +6,10 @@ import type {
   InventorySummary,
   ServiceInventory
 } from "../../../shared/inventory";
+import type { PerformanceRange, PerformanceSnapshot } from "../../../shared/performance";
 
 export type EnvironmentId = InventoryEnvironment;
-export type TimeRange = "15m" | "1h" | "6h" | "24h";
+export type TimeRange = PerformanceRange;
 export type HealthStatus = HealthState;
 export type DataMode = InventoryMode | "fixture";
 
@@ -44,4 +45,7 @@ export interface OverviewSnapshot {
 
 export interface MonitoringProvider {
   getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot>;
+  getPerformance(environment: EnvironmentId, serviceId: string, timeRange: TimeRange): Promise<PerformanceSnapshot>;
 }
+
+export type { PerformanceSnapshot } from "../../../shared/performance";

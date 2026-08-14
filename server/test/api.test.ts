@@ -1,14 +1,34 @@
 import { describe, expect, it } from "vitest";
 
 import type { InventorySnapshot } from "../../shared/inventory";
-import { createInventoryHttpServer, handleInventoryRequest, safeNodeRequestMethod, type InventoryReader } from "../src/api";
+import type { PerformanceSnapshot } from "../../shared/performance";
+import { createInventoryHttpServer, handleInventoryRequest, safeNodeRequestMethod, type InventoryReader, type PerformanceReader } from "../src/api";
 import { InventoryAggregator } from "../src/inventory";
+import { PerformanceRequestError } from "../src/prometheus";
 import { catalogFixture } from "./fixtures";
 
 const reader = new InventoryAggregator(catalogFixture, [], () => new Date("2026-08-13T01:00:00Z"));
 
-function request(path: string, method = "GET", inventoryReader: InventoryReader = reader): Promise<Response> {
-  return handleInventoryRequest(new Request(`http://inventory-api.local${path}`, { method }), inventoryReader);
+const performanceSnapshot: PerformanceSnapshot = {
+  apiVersion: 1,
+  mode: "live",
+  assembledAt: "2026-08-13T18:00:00.000Z",
+  observedAt: "2026-08-13T18:00:00.000Z",
+  environment: "demo",
+  serviceId: "cpq-demo",
+  window: { range: "1h", start: "2026-08-13T17:00:00.000Z", end: "2026-08-13T18:00:00.000Z", stepSeconds: 60, maxPoints: 61 },
+  source: { name: "prometheus", availability: "available", message: null },
+  metrics: []
+};
+const performanceReader: PerformanceReader = {
+  async getPerformance(environment, serviceId, range): Promise<PerformanceSnapshot> {
+    if (serviceId === "missing") throw new PerformanceRequestError("Unsupported service: missing");
+    return { ...performanceSnapshot, environment: environment as "demo", serviceId, window: { ...performanceSnapshot.window, range: range as "1h" } };
+  }
+};
+
+function request(path: string, method = "GET", inventoryReader: InventoryReader = reader, metricsReader: PerformanceReader = performanceReader): Promise<Response> {
+  return handleInventoryRequest(new Request(`http://inventory-api.local${path}`, { method }), inventoryReader, metricsReader);
 }
 
 describe("read-only inventory API", () => {
@@ -32,6 +52,40 @@ describe("read-only inventory API", () => {
     expect(response.status).toBe(200);
     expect(body.service.id).toBe("cpq-demo");
     expect(body.sources.length).toBeGreaterThan(0);
+  });
+
+  it("serves performance only through bounded allow-listed filters", async () => {
+    const response = await request("/api/v1/performance?environment=demo&service=cpq-demo&range=1h");
+    const body = await response.json() as PerformanceSnapshot;
+
+    expect(response.status).toBe(200);
+    expect(body.serviceId).toBe("cpq-demo");
+    expect(body.window.range).toBe("1h");
+
+    for (const path of [
+      "/api/v1/performance?environment=production",
+      "/api/v1/performance?range=30d",
+      "/api/v1/performance?service=missing",
+      "/api/v1/performance?query=up",
+      "/api/v1/performance?promql=up"
+    ]) {
+      const invalid = await request(path);
+      expect(invalid.status).toBe(400);
+    }
+  });
+
+  it("does not leak unexpected Prometheus errors", async () => {
+    const failingPerformanceReader: PerformanceReader = {
+      async getPerformance(): Promise<PerformanceSnapshot> {
+        throw new Error("Prometheus authorization=Bearer super-secret");
+      }
+    };
+    const response = await request("/api/v1/performance", "GET", reader, failingPerformanceReader);
+    const body = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(body).toContain("Performance telemetry could not be assembled");
+    expect(body).not.toContain("super-secret");
   });
 
   it("rejects writes, unsupported filters, and missing services explicitly", async () => {
@@ -65,7 +119,7 @@ describe("read-only inventory API", () => {
   });
 
   it("constructs the Node server adapter and rejects unknown routes", async () => {
-    const server = createInventoryHttpServer(reader);
+    const server = createInventoryHttpServer(reader, performanceReader);
     expect(server.listening).toBe(false);
     const missing = await request("/api/v2/inventory");
     expect(missing.status).toBe(404);

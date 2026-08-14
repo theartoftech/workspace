@@ -1,6 +1,6 @@
 # Development Lab Observability
 
-This standalone repository is the reviewable monitoring application for the CPQ development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprint 2 adds a read-only inventory API and live catalog/Gatus/Kubernetes health views to the existing portal, monitoring stack, internal checks, and same-host public-path simulation. Sprint 2 was deployed and passed automated verification and human UI acceptance on 2026-08-13; deployment remains an explicit operator action.
+This standalone repository is the reviewable monitoring application for the CPQ development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprint 3 adds bounded, read-only Prometheus performance queries and live traffic, error, latency, and saturation graphs to the Sprint 2 inventory portal. Sprint 2 was deployed and passed automated verification and human UI acceptance on 2026-08-13; Sprint 3 is implemented locally and deployment remains an explicit operator action.
 
 Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 0 covers the monitoring foundation, Sprint 1 and 1.1 provide the portal and guarded lab deployment, and Sprint 2 implements live deployment inventory.
 
@@ -8,16 +8,17 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 
 | Capability | Included in this slice |
 | --- | --- |
-| Service catalog | Strict JSON contract for CPQ demo/test, OAuth, Mailpit, and ERPNet |
+| Service catalog | Strict JSON contract for CPQ demo/test, OAuth, Mailpit, ERPNet, and the public portfolio |
 | Primary lab monitoring | Docker Compose with the enterprise portal, read-only inventory API, Prometheus, Grafana, Blackbox Exporter, node-exporter, cAdvisor, and Gatus |
 | Future cloud monitoring | `kube-prometheus-stack` Helm chart with Prometheus, Grafana, Alertmanager, and Kubernetes metrics |
 | Synthetic probe support | Prometheus Blackbox Exporter plus dedicated Gatus nodes |
 | Direct application metrics | CPQ demo `/api/actuator/prometheus` through one `ServiceMonitor` |
+| Portfolio request metrics | Private Nginx exporter sidecar with selected-window request totals and request rate |
 | Internal reachability | CPQ demo/test, OAuth demo/test, Mailpit, and ERPNet from the CPQ server |
 | Public-path simulation | Public CPQ demo and ERPNet URLs, including TLS expiry, from the same CPQ server—not an independent external vantage |
 | Alert delivery | Deferred until notification destinations and credential handling are selected |
 
-Overview, deployments, and service detail use live inventory. Performance, infrastructure, incidents, and settings remain explicitly labeled fixture previews until their planned sprints. SSO, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.
+Overview, deployments, and service detail use live inventory. Performance uses live Prometheus range queries. Infrastructure, incidents, and settings remain explicitly labeled fixture previews until their planned sprints. SSO, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.
 
 ## Repository layout
 
@@ -39,7 +40,7 @@ Overview, deployments, and service detail use live inventory. Performance, infra
 - `web/src` — enterprise shell, live and fixture providers, service detail, reusable components, and UI tests.
 - `documentation/adr` — architecture decisions for review before later live-data integration.
 
-## Review the Sprint 2 live inventory
+## Review the Sprint 3 performance workspace
 
 Build and run the read-only API against the already deployed lab Gatus endpoints:
 
@@ -48,6 +49,7 @@ npm install
 npm run build:server
 GATUS_INTERNAL_API_URL=http://192.168.86.246:8085/api/v1/endpoints/statuses \
 GATUS_PUBLIC_PATH_API_URL=http://192.168.86.246:8186/api/v1/endpoints/statuses \
+PROMETHEUS_API_URL=http://192.168.86.246:9090 \
   node dist-server/server/src/main.js
 ```
 
@@ -57,7 +59,7 @@ In another console, start the portal:
 npm run dev
 ```
 
-Vite proxies `/api` to the local API on port `3001`; the deployed Compose profile provides the equivalent same-origin proxy. The persistent data banner distinguishes live, partial, and test-fixture states. Navigate with the left rail or press `/` to open command search.
+Vite proxies `/api` to the local API on port `3001`; the deployed Compose profile provides the equivalent same-origin proxy. Open `/performance` to inspect bounded 15-minute through 24-hour ranges, filter by environment or service, and refresh every live view. The persistent data banner distinguishes live, partial, and test-fixture states. Navigate with the left rail or press `/` to open command search.
 
 Run the complete frontend quality gate with:
 
@@ -71,13 +73,13 @@ npm run lint
 npm run build
 ```
 
-The live route set includes Overview, Deployments, and `/services/<catalog-id>`. The remaining primary routes retain explicit preview data. The API accepts only GET/HEAD and the browser never receives infrastructure credentials.
+The live route set includes Overview, Deployments, Performance, and `/services/<catalog-id>`. Infrastructure, Incidents, and Settings retain explicit preview data. The API accepts only GET/HEAD; performance queries are selected from server-owned templates, ranges are bounded and down-sampled, and the browser never receives infrastructure credentials or arbitrary PromQL access.
 
 ## Acceptance criteria
 
 The slice is ready to deploy when all of these are true:
 
-1. `python3 scripts/validate_catalog.py` reports five services, six internal probes, and two external probes.
+1. `python3 scripts/validate_catalog.py` reports six services, seven internal probes, and three external probes.
 2. `python3 -m unittest discover -s tests -v` passes.
 3. The primary lab Compose stack passes both plugin and standalone Compose validation.
 4. Helm dependency build, lint, and template rendering pass with chart versions locked for the cloud path.
@@ -175,6 +177,7 @@ Use `deployment/scripts/deploy-gatus.sh` for guarded local or SSH-based plan, pr
 - Duplicate service/probe identifiers and unsupported catalog fields are rejected.
 - Missing, expired, or rejected Kubernetes credentials produce explicit partial inventory and never a false healthy state.
 - Gatus and Kubernetes requests have deadlines; Kubernetes reads use bounded concurrency.
+- Prometheus requests have deadlines and bounded concurrency; public inputs select only allow-listed query templates and fixed query windows.
 - Credentials, sensitive headers, URL userinfo, and secret query values are redacted from diagnostics.
 - Credentials, sensitive query keys, invalid URLs, and TLS checks on plain HTTP are rejected.
 - Probe timeout must remain shorter than its interval.
@@ -182,6 +185,7 @@ Use `deployment/scripts/deploy-gatus.sh` for guarded local or SSH-based plan, pr
 - Container tags are pinned; the process has a read-only root filesystem, no added capabilities, and `no-new-privileges`.
 - Prometheus retention and storage are bounded to prevent unplanned disk exhaustion.
 - The CPQ scrape selects only the known demo workload labels in the `default` namespace.
+- Portfolio Nginx status stays pod-local; only its exporter sidecar can read it, and Prometheus reaches the exporter through a cluster-private Service.
 
 ## Operational caveats
 

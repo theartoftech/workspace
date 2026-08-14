@@ -1,4 +1,5 @@
 import {
+  ArrowsClockwiseIcon,
   BellIcon,
   CaretDownIcon,
   ChartLineUpIcon,
@@ -151,6 +152,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [operatorOpen, setOperatorOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const location = useLocation();
 
   useEffect(() => {
@@ -166,6 +169,15 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
       });
     return () => { active = false; };
   }, [environment, provider, timeRange]);
+
+  function refreshMonitoringData(): void {
+    setRefreshKey((value) => value + 1);
+    setRefreshedAt(new Date());
+    setError(null);
+    void provider.getOverview(environment, timeRange)
+      .then((nextSnapshot) => setSnapshot(nextSnapshot))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Unknown monitoring provider error"));
+  }
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -208,6 +220,10 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
           <div className="topbar-controls">
             <label className="select-control"><span className="sr-only">Environment</span><select value={environment} onChange={(event) => setEnvironment(event.target.value as EnvironmentId)}><option value="all">All environments</option><option value="demo">Demo</option><option value="test">Test</option><option value="shared">Shared</option></select><CaretDownIcon aria-hidden="true" size={13} /></label>
             <label className="select-control time-control"><ClockIcon aria-hidden="true" size={15} /><span className="sr-only">Time range</span><select value={timeRange} onChange={(event) => setTimeRange(event.target.value as TimeRange)}><option value="15m">Last 15 min</option><option value="1h">Last 1 hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select><CaretDownIcon aria-hidden="true" size={13} /></label>
+            <div className="refresh-control">
+              <button className="icon-button" type="button" aria-label="Refresh monitoring data" onClick={refreshMonitoringData}><ArrowsClockwiseIcon aria-hidden="true" size={18} /></button>
+              {refreshedAt !== null && <span aria-live="polite">Refreshed {refreshedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}
+            </div>
             <div className="popover-anchor">
               <button className="icon-button notification-button" type="button" aria-label="Open alerts, 2 active" aria-expanded={alertsOpen} onClick={() => setAlertsOpen((value) => !value)}><BellIcon aria-hidden="true" size={20} /><span>2</span></button>
               {alertsOpen && <div className="utility-popover alerts-popover"><strong>Active alerts</strong><button type="button"><span className="alert-dot alert-dot-critical" />Keycloak p95 above SLO<small>12 sec ago</small></button><button type="button"><span className="alert-dot alert-dot-warning" />CPQ test readiness<small>24 sec ago</small></button></div>}
@@ -223,8 +239,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
           <p>{snapshot?.mode === "fixture"
             ? "This test shell uses deterministic Sprint 1 data."
             : snapshot?.mode === "partial"
-              ? "Available sources stay live and unavailable sources are explicit. Infrastructure, performance, incidents, and settings remain fixture previews."
-              : "Overview, deployments, and service details use live read-only sources. Infrastructure, performance, incidents, and settings remain fixture previews."}</p>
+              ? "Available sources stay live and unavailable sources are explicit. Performance uses Prometheus; infrastructure, incidents, and settings remain fixture previews."
+              : "Overview, deployments, service details, and performance use live read-only sources. Infrastructure, incidents, and settings remain fixture previews."}</p>
           <small>{snapshot ? `Snapshot ${new Date(snapshot.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading snapshot"}</small>
         </div>
         <main id="main-content" tabIndex={-1}>
@@ -234,7 +250,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
               <Route path="/services/:serviceId" element={<ServiceDetailPage snapshot={routeSnapshot} />} />
               <Route path="/deployments" element={<DeploymentsPage snapshot={routeSnapshot} />} />
               <Route path="/infrastructure" element={<InfrastructurePage />} />
-              <Route path="/performance" element={<PerformancePage snapshot={routeSnapshot} />} />
+              <Route path="/performance" element={<PerformancePage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
               <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<ErrorShell message="The requested monitoring route does not exist." />} />

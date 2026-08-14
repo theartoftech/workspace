@@ -211,6 +211,8 @@ kbd {
   font-size: 10px;
 }
 .topbar-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.refresh-control { display: flex; align-items: center; gap: 7px; }
+.refresh-control > span { max-width: 74px; color: var(--subtle); font-size: 8px; line-height: 1.2; }
 .select-control {
   height: 38px;
   display: flex;
@@ -486,9 +488,30 @@ progress::-webkit-progress-bar { background: #1b2a3b; }
 progress::-webkit-progress-value { background: var(--primary); }
 progress::-moz-progress-bar { background: var(--primary); }
 
+.performance-service-control { min-width: 210px; display: flex; flex-direction: column; gap: 5px; color: var(--subtle); font-size: 8px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.performance-service-control select { height: 36px; padding: 0 30px 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-raised); color: #c9d4e2; font-size: 10px; text-transform: none; }
+.performance-source { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-muted); color: var(--muted); }
+.performance-source > svg { flex: none; color: var(--green); }
+.performance-source > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.performance-source strong { display: flex; align-items: center; gap: 8px; color: #d7e2ee; font-size: 10px; }
+.performance-source span, .performance-source small { color: var(--subtle); font-size: 9px; }
+.performance-source-partial, .performance-source-error { border-color: #63482c; background: var(--amber-soft); }
+.performance-source-partial > svg, .performance-source-error > svg { color: var(--amber); }
+.source-pill { padding: 2px 6px; border: 1px solid currentColor; border-radius: 99px; color: var(--green) !important; font-size: 7px !important; letter-spacing: .06em; text-transform: uppercase; }
+.performance-source-partial .source-pill, .performance-source-error .source-pill { color: var(--amber) !important; }
 .performance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .performance-panel { min-height: 290px; }
 .small-chart { height: 222px; padding: 14px; }
+.telemetry-empty { min-height: 190px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 7px; padding: 20px; color: var(--subtle); text-align: center; }
+.telemetry-empty strong { color: var(--muted); font-size: 11px; }
+.telemetry-empty span { max-width: 360px; font-size: 9px; line-height: 1.5; }
+.metric-diagnostics { margin: 0 14px 14px; padding: 8px 10px; border: 1px solid #63482c; border-radius: 5px; background: var(--amber-soft); }
+.metric-diagnostics p { margin: 3px 0; color: #d2a56c; font-size: 8px; }
+.performance-correlation { margin-top: 14px; }
+.correlation-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 15px; }
+.correlation-grid > div { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); }
+.correlation-grid span { color: var(--subtle); font-size: 8px; text-transform: uppercase; }
+.correlation-grid strong { overflow-wrap: anywhere; font-size: 9px; line-height: 1.45; }
 .capacity-summary-panel { display: flex; flex-direction: column; }
 .forecast-value { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 24px; }
 .forecast-value strong { font-size: 38px; letter-spacing: -.04em; }
@@ -564,6 +587,7 @@ progress::-moz-progress-bar { background: var(--primary); }
   .metrics-grid, .resource-grid, .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lower-grid { grid-template-columns: 1fr; }
   .incident-command-grid { grid-template-columns: minmax(280px, .8fr) minmax(360px, 1.2fr); }
+  .refresh-control > span { display: none; }
 }
 
 @media (max-width: 860px) {
@@ -579,6 +603,7 @@ progress::-moz-progress-bar { background: var(--primary); }
   .search-trigger kbd { display: none; }
   .time-control { display: none; }
   .overview-grid, .infrastructure-layout, .incident-command-grid { grid-template-columns: 1fr; }
+  .correlation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 600px) {
@@ -591,6 +616,7 @@ progress::-moz-progress-bar { background: var(--primary); }
   main { padding: 18px 14px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .metrics-grid, .resource-grid, .settings-grid, .performance-grid, .state-gallery, .skeleton-grid { grid-template-columns: 1fr; }
+  .correlation-grid { grid-template-columns: 1fr; }
   .metric-card { min-height: 104px; }
   .topology-lanes { grid-template-columns: 1fr; }
   .topology-column:not(:last-child)::after { display: none; }

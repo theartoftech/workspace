@@ -16,12 +16,18 @@ describe("inventory catalog adapter", () => {
       "cpq-test",
       "oauth",
       "mailpit",
-      "erpnet"
+      "erpnet",
+      "portfolio"
     ]);
     expect(catalog.services.find((service) => service.id === "cpq-demo")?.workloads).toContainEqual({
       kind: "Deployment",
       namespace: "default",
       name: "application"
+    });
+    expect(catalog.services.find((service) => service.id === "portfolio")?.workloads).toContainEqual({
+      kind: "Deployment",
+      namespace: "public-site",
+      name: "public-website"
     });
   });
 

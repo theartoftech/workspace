@@ -33,3 +33,15 @@ endpoints:
       - "[STATUS] == 200"
       - "[CERTIFICATE_EXPIRATION] > 168h"
       - "[RESPONSE_TIME] < 3000"
+
+  - name: portfolio-home-external
+    group: portfolio
+    url: "https://jefferyhaynes.net/"
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY] == pat(*Jeff*)"
+      - "[CERTIFICATE_EXPIRATION] > 168h"
+      - "[RESPONSE_TIME] < 3000"

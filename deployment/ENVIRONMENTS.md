@@ -67,7 +67,7 @@ Set `MONITORING_UID` and `MONITORING_GID` from `id -u` and `id -g`. Create the G
 
 ### Optional live Kubernetes evidence
 
-Gatus inventory works without Kubernetes credentials. In that case, the portal deliberately reports `partial` mode and mapped workloads remain unknown. To enable Kubernetes evidence, first review `deploy/kubernetes/inventory-reader-rbac.yaml`. It grants only `get` on Deployments and Pods and binds that role only in the catalog namespaces `default` and `cpq-test`.
+Gatus inventory works without Kubernetes credentials. In that case, the portal deliberately reports `partial` mode and mapped workloads remain unknown. To enable Kubernetes evidence, first review `deploy/kubernetes/inventory-reader-rbac.yaml`. It grants only `get` on Deployments and Pods and binds that role only in the catalog namespaces `default`, `cpq-test`, and `public-site`.
 
 Applying RBAC is a separate, explicit cluster mutation and is not performed by the deployment script:
 
@@ -87,6 +87,12 @@ kubectl --namespace monitoring create token workspace-monitor-inventory --durati
 ```
 
 The Compose profile mounts the k3s server CA from `/var/lib/rancher/k3s/server/tls/server-ca.crt`; override `KUBERNETES_HOST_CA_FILE` only when the reviewed server path differs. Renew the token before expiry and restart only `inventory-api` so it rereads the file. An expired or rejected token becomes an explicit unavailable source and cannot turn workload health green.
+
+### Portfolio request metrics prerequisite
+
+Deploy the portfolio repository before this monitoring release. Its Kubernetes manifest adds a pinned Nginx exporter sidecar and a separate `public-website-metrics` ClusterIP Service. The Nginx status listener binds only to pod loopback; neither the status endpoint nor exporter is added to the public website LoadBalancer.
+
+Prometheus resolves that private Service through k3s CoreDNS. `KUBERNETES_CLUSTER_DNS` defaults to the standard k3s address `10.43.0.10`; set it explicitly in the runtime `.env` if the cluster uses another service CIDR. The monitoring `verify` command refuses acceptance unless the portfolio `request-total` series is present.
 
 Then run the read-only preflight:
 

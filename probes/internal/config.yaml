@@ -73,3 +73,14 @@ endpoints:
       - "[STATUS] == 200"
       - "[CERTIFICATE_EXPIRATION] > 168h"
       - "[RESPONSE_TIME] < 3000"
+
+  - name: portfolio-home-internal
+    group: portfolio
+    url: "http://192.168.86.246:8084/"
+    interval: 60s
+    client:
+      timeout: 5s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY] == pat(*Jeff*)"
+      - "[RESPONSE_TIME] < 2000"

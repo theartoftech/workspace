@@ -19,6 +19,15 @@ scrape_configs:
           environment: demo
           source: direct-application
 
+  - job_name: portfolio-nginx
+    static_configs:
+      - targets:
+          - public-website-metrics.public-site.svc.cluster.local:9113
+        labels:
+          service: portfolio
+          environment: demo
+          source: nginx-exporter
+
   - job_name: node-exporter
     static_configs:
       - targets:

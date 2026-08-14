@@ -1,10 +1,16 @@
 import type { HealthState, InventorySnapshot, ServiceInventory } from "../../../shared/inventory";
+import type { PerformanceMetric, PerformanceMetricId, PerformanceSnapshot, PerformanceUnit } from "../../../shared/performance";
 import { incidentFixtures, serviceFixtures, trafficFixtures } from "./fixtures";
 import type { EnvironmentId, MonitoringProvider, OverviewSnapshot, TimeRange } from "./types";
 
 const environments = new Set<EnvironmentId>(["all", "demo", "test", "shared"]);
 const timeRanges = new Set<TimeRange>(["15m", "1h", "6h", "24h"]);
 const healthStates = new Set<HealthState>(["healthy", "degraded", "failing", "unknown", "paused", "stale"]);
+const performanceMetricIds = new Set<PerformanceMetricId>([
+  "request-rate", "request-total", "error-rate", "latency-p50", "latency-p95", "latency-p99", "process-cpu",
+  "system-cpu", "jvm-heap", "host-memory", "db-pool-saturation", "pod-restarts"
+]);
+const performanceUnits = new Set<PerformanceUnit>(["requests/s", "requests", "percent", "milliseconds", "restarts"]);
 
 function validateFilters(environment: EnvironmentId, timeRange: TimeRange): void {
   if (!environments.has(environment)) throw new Error(`Unsupported environment: ${environment}`);
@@ -68,6 +74,89 @@ function parseInventory(value: unknown): InventorySnapshot {
   return value as InventorySnapshot;
 }
 
+function isPerformanceMetric(value: unknown): value is PerformanceMetric {
+  const raw = record(value);
+  if (raw === null
+    || !performanceMetricIds.has(raw.id as PerformanceMetricId)
+    || typeof raw.label !== "string"
+    || !performanceUnits.has(raw.unit as PerformanceUnit)
+    || !["ok", "no-data", "error"].includes(String(raw.status))
+    || !Array.isArray(raw.points)
+    || !(raw.latest === null || typeof raw.latest === "number" && Number.isFinite(raw.latest))
+    || !(raw.threshold === null || typeof raw.threshold === "number" && Number.isFinite(raw.threshold))
+    || !(raw.message === null || typeof raw.message === "string")) return false;
+  return raw.points.every((point) => {
+    const parsed = record(point);
+    return parsed !== null
+      && typeof parsed.timestamp === "string"
+      && !Number.isNaN(new Date(parsed.timestamp).getTime())
+      && typeof parsed.value === "number"
+      && Number.isFinite(parsed.value);
+  });
+}
+
+function parsePerformance(value: unknown): PerformanceSnapshot {
+  const raw = record(value);
+  const window = record(raw?.window);
+  const source = record(raw?.source);
+  if (raw === null
+    || raw.apiVersion !== 1
+    || !["live", "partial"].includes(String(raw.mode))
+    || typeof raw.assembledAt !== "string"
+    || !(raw.observedAt === null || typeof raw.observedAt === "string")
+    || !environments.has(raw.environment as EnvironmentId)
+    || typeof raw.serviceId !== "string"
+    || window === null
+    || !timeRanges.has(window.range as TimeRange)
+    || typeof window.start !== "string"
+    || typeof window.end !== "string"
+    || !Number.isInteger(window.stepSeconds)
+    || !Number.isInteger(window.maxPoints)
+    || source === null
+    || source.name !== "prometheus"
+    || !["available", "partial", "unavailable"].includes(String(source.availability))
+    || !(source.message === null || typeof source.message === "string")
+    || !Array.isArray(raw.metrics)
+    || !raw.metrics.every(isPerformanceMetric)) {
+    throw new Error("Performance API returned a malformed response");
+  }
+  return value as PerformanceSnapshot;
+}
+
+function fixturePerformance(environment: EnvironmentId, serviceId: string, range: TimeRange): PerformanceSnapshot {
+  const points = trafficFixtures.map((point, index) => ({
+    timestamp: new Date(Date.parse("2026-08-12T14:20:00Z") + index * 300_000).toISOString(),
+    value: point.requests / 60
+  }));
+  const metric = (id: PerformanceMetricId, label: string, unit: PerformanceUnit, values = points): PerformanceMetric => ({
+    id, label, unit, status: "ok", points: values, latest: values.at(-1)?.value ?? null, threshold: null, message: null
+  });
+  return {
+    apiVersion: 1,
+    mode: "live",
+    assembledAt: "2026-08-12T15:15:00Z",
+    observedAt: points.at(-1)?.timestamp ?? null,
+    environment,
+    serviceId,
+    window: { range, start: points[0]?.timestamp ?? "2026-08-12T14:15:00Z", end: "2026-08-12T15:15:00Z", stepSeconds: 300, maxPoints: 13 },
+    source: { name: "prometheus", availability: "available", message: null },
+    metrics: [
+      metric("request-rate", "Request rate", "requests/s"),
+      metric("request-total", "Requests in selected window", "requests", points.map((point, index) => ({ ...point, value: index * 24 }))),
+      metric("error-rate", "Server error rate", "percent", points.map((point) => ({ ...point, value: 0.2 }))),
+      metric("latency-p50", "Synthetic latency p50", "milliseconds", points.map((point) => ({ ...point, value: 18 }))),
+      metric("latency-p95", "Synthetic latency p95", "milliseconds", points.map((point) => ({ ...point, value: 42 }))),
+      metric("latency-p99", "Synthetic latency p99", "milliseconds", points.map((point) => ({ ...point, value: 55 }))),
+      metric("process-cpu", "Application process CPU", "percent", points.map((point) => ({ ...point, value: 8 }))),
+      metric("system-cpu", "Application host CPU", "percent", points.map((point) => ({ ...point, value: 22 }))),
+      metric("jvm-heap", "JVM heap utilization", "percent", points.map((point) => ({ ...point, value: 48 }))),
+      metric("host-memory", "Lab host memory utilization", "percent", points.map((point) => ({ ...point, value: 62 }))),
+      metric("db-pool-saturation", "Database pool saturation", "percent", points.map((point) => ({ ...point, value: 20 }))),
+      metric("pod-restarts", "Pod restarts", "restarts", points.map((point) => ({ ...point, value: 0 })))
+    ]
+  };
+}
+
 export function createFixtureMonitoringProvider(): MonitoringProvider {
   return {
     getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot> {
@@ -87,6 +176,12 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
           traffic: trafficFixtures
         } as const;
       });
+    },
+    getPerformance(environment: EnvironmentId, serviceId: string, timeRange: TimeRange): Promise<PerformanceSnapshot> {
+      return Promise.resolve().then(() => {
+        validateFilters(environment, timeRange);
+        return fixturePerformance(environment, serviceId, timeRange);
+      });
     }
   };
 }
@@ -100,31 +195,29 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 5000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000) throw new Error("Live provider timeoutMs must be 100..30000");
+  async function fetchJson(path: string, label: string): Promise<unknown> {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetchImpl(path, { method: "GET", headers: { Accept: "application/json" }, signal: controller.signal });
+    } catch (cause: unknown) {
+      if (controller.signal.aborted) throw new Error(`${label} timed out after ${timeoutMs} ms`);
+      throw new Error(`${label} request failed: ${cause instanceof Error ? cause.message : "unknown error"}`);
+    } finally {
+      window.clearTimeout(timeout);
+    }
+    if (!response.ok) throw new Error(`${label} returned HTTP ${response.status}`);
+    try {
+      return await response.json() as unknown;
+    } catch {
+      throw new Error(`${label} returned malformed JSON`);
+    }
+  }
   return {
     async getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot> {
       validateFilters(environment, timeRange);
-      const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-      let response: Response;
-      try {
-        response = await fetchImpl(`/api/v1/inventory?environment=${encodeURIComponent(environment)}`, {
-          method: "GET",
-          headers: { Accept: "application/json" },
-          signal: controller.signal
-        });
-      } catch (cause: unknown) {
-        if (controller.signal.aborted) throw new Error(`Inventory API timed out after ${timeoutMs} ms`);
-        throw new Error(`Inventory API request failed: ${cause instanceof Error ? cause.message : "unknown error"}`);
-      } finally {
-        window.clearTimeout(timeout);
-      }
-      if (!response.ok) throw new Error(`Inventory API returned HTTP ${response.status}`);
-      let payload: unknown;
-      try {
-        payload = await response.json() as unknown;
-      } catch {
-        throw new Error("Inventory API returned malformed JSON");
-      }
+      const payload = await fetchJson(`/api/v1/inventory?environment=${encodeURIComponent(environment)}`, "Inventory API");
       const inventory = parseInventory(payload);
       return {
         mode: inventory.mode,
@@ -138,6 +231,11 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
         incidents: incidentFixtures,
         traffic: trafficFixtures
       };
+    },
+    async getPerformance(environment: EnvironmentId, serviceId: string, timeRange: TimeRange): Promise<PerformanceSnapshot> {
+      validateFilters(environment, timeRange);
+      const path = `/api/v1/performance?environment=${encodeURIComponent(environment)}&service=${encodeURIComponent(serviceId)}&range=${encodeURIComponent(timeRange)}`;
+      return parsePerformance(await fetchJson(path, "Performance API"));
     }
   };
 }

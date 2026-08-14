@@ -175,6 +175,46 @@
           "certificateMinimumHours": 168
         }
       ]
+    },
+    {
+      "id": "portfolio",
+      "displayName": "Portfolio",
+      "kind": "application",
+      "environment": "demo",
+      "owner": "Development Lab",
+      "criticality": "high",
+      "workloads": [
+        {
+          "kind": "Deployment",
+          "namespace": "public-site",
+          "name": "public-website"
+        }
+      ],
+      "probes": [
+        {
+          "id": "portfolio-home-internal",
+          "displayName": "Portfolio home (internal)",
+          "group": "portfolio",
+          "url": "http://192.168.86.246:8084/",
+          "vantagePoints": ["internal"],
+          "intervalSeconds": 60,
+          "timeoutSeconds": 5,
+          "expectedStatus": 200,
+          "bodyCondition": "[BODY] == pat(*Jeff*)"
+        },
+        {
+          "id": "portfolio-home-external",
+          "displayName": "Portfolio home (external)",
+          "group": "portfolio",
+          "url": "https://jefferyhaynes.net/",
+          "vantagePoints": ["external"],
+          "intervalSeconds": 60,
+          "timeoutSeconds": 10,
+          "expectedStatus": 200,
+          "bodyCondition": "[BODY] == pat(*Jeff*)",
+          "certificateMinimumHours": 168
+        }
+      ]
     }
   ]
 }

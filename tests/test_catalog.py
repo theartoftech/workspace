@@ -23,7 +23,7 @@ class CatalogContractTests(unittest.TestCase):
         self.assertEqual(catalog.version, 1)
         self.assertEqual(
             {service.service_id for service in catalog.services},
-            {"cpq-demo", "cpq-test", "oauth", "mailpit", "erpnet"},
+            {"cpq-demo", "cpq-test", "oauth", "mailpit", "erpnet", "portfolio"},
         )
         demo = next(service for service in catalog.services if service.service_id == "cpq-demo")
         self.assertEqual(len(demo.workloads), 1)
@@ -46,11 +46,12 @@ class CatalogContractTests(unittest.TestCase):
                 "mailpit-api-internal",
                 "oauth-demo-discovery-internal",
                 "oauth-test-discovery-internal",
+                "portfolio-home-internal",
             },
         )
         self.assertEqual(
             external,
-            {"cpq-demo-ready-external", "erpnet-ping-external"},
+            {"cpq-demo-ready-external", "erpnet-ping-external", "portfolio-home-external"},
         )
 
     def test_duplicate_probe_ids_are_rejected(self) -> None:

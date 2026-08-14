@@ -54,7 +54,11 @@ services:
       KUBERNETES_API_URL: ${KUBERNETES_API_URL:-https://host.docker.internal:6443}
       KUBERNETES_TOKEN_FILE: /run/secrets/kubernetes_inventory_token
       KUBERNETES_TOOL_URL: "#kubernetes-api-no-browser-link"
+      PROMETHEUS_API_URL: http://prometheus:9090
+      PROMETHEUS_CONCURRENCY: "4"
       NODE_EXTRA_CA_CERTS: /run/kubernetes-ca/server-ca.crt
+    depends_on:
+      - prometheus
     extra_hosts:
       - host.docker.internal:host-gateway
     volumes:
@@ -92,6 +96,8 @@ services:
       - "${MONITORING_BIND_ADDRESS:-127.0.0.1}:9090:9090"
     extra_hosts:
       - host.docker.internal:host-gateway
+    dns:
+      - ${KUBERNETES_CLUSTER_DNS:-10.43.0.10}
     volumes:
       - ./config/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
       - prometheus-data:/prometheus

@@ -7,6 +7,7 @@ import { GatusAdapter } from "./gatus";
 import { FetchJsonHttpClient } from "./http";
 import { InventoryAggregator } from "./inventory";
 import { KubernetesAdapter } from "./kubernetes";
+import { PrometheusPerformanceReader } from "./prometheus";
 import { UnavailableSourceCollector, type SourceCollector } from "./source";
 import runtimePackage from "../package.json";
 
@@ -50,7 +51,15 @@ async function run(): Promise<void> {
     new GatusAdapter("gatus-public-path", config.gatusPublicPath.apiUrl, config.gatusPublicPath.toolUrl, client, config.staleAfterSeconds),
     await kubernetesCollector(config, client)
   ];
-  const server = createInventoryHttpServer(new InventoryAggregator(catalog, collectors));
+  const server = createInventoryHttpServer(
+    new InventoryAggregator(catalog, collectors),
+    new PrometheusPerformanceReader({
+      apiUrl: config.prometheus.apiUrl,
+      catalog,
+      client,
+      concurrency: config.prometheus.concurrency
+    })
+  );
   server.listen(config.port, "0.0.0.0", () => {
     process.stdout.write(`Workspace Monitor inventory API listening on port ${config.port}\n`);
   });

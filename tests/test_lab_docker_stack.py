@@ -109,6 +109,10 @@ class SingleHostComposeContractTests(unittest.TestCase):
         self.assertIn("job_name: cadvisor", prometheus)
         self.assertIn("job_name: gatus-internal", prometheus)
         self.assertIn("job_name: gatus-public-path", prometheus)
+        self.assertIn("job_name: portfolio-nginx", prometheus)
+        self.assertIn("public-website-metrics.public-site.svc.cluster.local:9113", prometheus)
+        self.assertIn("service: portfolio", prometheus)
+        self.assertIn("KUBERNETES_CLUSTER_DNS:-10.43.0.10", (STACK_DIR / "compose.yaml").read_text(encoding="utf-8"))
 
     def test_cloudflare_hostname_points_at_loopback_grafana_for_sprint_zero(self) -> None:
         compose = (STACK_DIR / "compose.yaml").read_text(encoding="utf-8")
@@ -163,6 +167,9 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("cap_drop:\n      - ALL", api)
         self.assertNotIn("ports:", api)
         self.assertIn("KUBERNETES_TOKEN_FILE: /run/secrets/kubernetes_inventory_token", api)
+        self.assertIn("PROMETHEUS_API_URL: http://prometheus:9090", api)
+        self.assertIn('PROMETHEUS_CONCURRENCY: "4"', api)
+        self.assertIn("depends_on:\n      - prometheus", api)
         self.assertIn("runtime-secrets:/run/secrets:ro", api)
         self.assertIn("mem_limit: 128m", api)
         self.assertIn("cpus: 0.25", api)
@@ -512,9 +519,16 @@ exit 1
         for route in ("/", "/deployments", "/infrastructure", "/performance", "/incidents", "/settings"):
             self.assertIn(f'"{route}"', source)
         self.assertIn("/api/v1/inventory?environment=all", source)
+        self.assertIn("/api/v1/performance?environment=demo&service=cpq-demo&range=1h", source)
+        self.assertIn("/api/v1/performance?environment=demo&service=portfolio&range=1h", source)
         self.assertIn('"apiVersion":1', source)
+        self.assertIn('"serviceId":"cpq-demo"', source)
+        self.assertIn('"id":"request-rate"', source)
+        self.assertIn('"id":"request-total"', source)
+        self.assertIn("portfolio-home-internal", source)
         self.assertIn("/tools/gatus-internal/api/v1/endpoints/statuses", source)
         self.assertIn("Live inventory", source)
+        self.assertIn("Prometheus telemetry", source)
         self.assertIn("validate_portal_port", source)
         self.assertIn("PORTAL_BUILD_REVISION", source)
 
@@ -574,11 +588,15 @@ count=$((count + 1))
 printf '%s' "$count" > "$MONITORING_CURL_COUNT"
 if (( count < 3 )); then exit 1; fi
 if [[ " $* " == *"/tools/gatus-internal/api/v1/endpoints/statuses"* ]]; then
-    printf '[{"name":"cpq-demo-ready-internal"}]'
+    printf '[{"name":"cpq-demo-ready-internal"},{"name":"portfolio-home-internal"}]'
 elif [[ " $* " == *"/api/v1/inventory?environment=all"* ]]; then
-    printf '{"apiVersion":1,"services":[{"id":"cpq-demo"}]}'
+    printf '{"apiVersion":1,"services":[{"id":"cpq-demo"},{"id":"portfolio"}]}'
+elif [[ " $* " == *"/api/v1/performance?environment=demo&service=cpq-demo&range=1h"* ]]; then
+    printf '{"apiVersion":1,"serviceId":"cpq-demo","metrics":[{"id":"request-rate"}]}'
+elif [[ " $* " == *"/api/v1/performance?environment=demo&service=portfolio&range=1h"* ]]; then
+    printf '{"apiVersion":1,"serviceId":"portfolio","metrics":[{"id":"request-total","status":"ok"}]}'
 elif [[ " $* " == *" http://127.0.0.1:3100/assets/"* ]]; then
-    printf 'Live inventory'
+    printf 'Live inventory Prometheus telemetry'
 elif [[ " $* " == *" http://127.0.0.1:3100/"* && " $* " != *"/healthz"* ]]; then
     printf '<title>Workspace Monitor</title><script src="/assets/index-test.js"></script>'
 fi

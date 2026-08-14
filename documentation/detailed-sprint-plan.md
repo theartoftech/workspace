@@ -31,7 +31,7 @@
 | 1 | Enterprise application shell | Deployed with Sprint 1.1 | Navigate the approved enterprise shell using fixture data |
 | 1.1 | Portal packaging and lab deployment | Deployed and user-verified | Build and run the hardened fixture portal beside the monitoring stack, then review the reversible Cloudflare cutover |
 | 2 | Live deployment inventory | Deployed and user-verified | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
-| 3 | Traffic and performance | Planned | Inspect real request rate, errors, saturation, and latency graphs |
+| 3 | Traffic and performance | Implemented locally; not deployed | Inspect real request rate, errors, saturation, and latency graphs |
 | 4 | Infrastructure topology | Planned | Drill from an environment into workloads, nodes, and dependencies |
 | 5 | Alerts and incident operations | Planned | Triage, acknowledge, silence, and annotate a simulated incident |
 | 6 | Logs and event correlation | Planned | Move from a failed service to relevant logs and Kubernetes events |
@@ -62,7 +62,7 @@ Establish a dependable monitoring substrate and a guarded, repeatable path for r
 
 ### Acceptance criteria
 
-- Catalog validation reports five services, six internal probes, and two external probes.
+- Catalog validation reports six services, seven internal probes, and three external probes.
 - Unit tests and strict type checking pass.
 - Helm dependency resolution, lint, and template rendering pass with locked versions.
 - Internal and external Compose files render successfully.
@@ -229,6 +229,10 @@ Replace overview fixtures with a trustworthy, read-only deployment inventory and
 - The API and UI are read-only in this sprint.
 
 ## Sprint 3: Traffic and performance
+
+### Status
+
+Implemented and tested locally on 2026-08-13. The Prometheus adapter, API, performance workspace, Compose wiring, and deployment verification are ready for review; no Sprint 3 deployment has been performed.
 
 ### Objective
 

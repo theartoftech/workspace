@@ -66,6 +66,9 @@ describe("enterprise application shell", () => {
             { source: "kubernetes", availability: "unavailable", observedAt: null, toolUrl: null, message: "Read-only credential unavailable" }
           ]
         };
+      },
+      getPerformance(environment, serviceId, timeRange) {
+        return fixtureProvider.getPerformance(environment, serviceId, timeRange);
       }
     };
     render(<MemoryRouter><App provider={partialProvider} /></MemoryRouter>);
@@ -86,6 +89,68 @@ describe("enterprise application shell", () => {
     await user.type(screen.getByRole("searchbox"), "incident");
     await user.click(screen.getByRole("option", { name: /Incidents/ }));
     expect(await screen.findByRole("heading", { name: "Incidents" })).toBeInTheDocument();
+  });
+
+  it("renders live-shaped performance panels, filters services, and refreshes globally", async () => {
+    const user = userEvent.setup();
+    let performanceRequests = 0;
+    const provider: MonitoringProvider = {
+      getOverview(environment, timeRange) {
+        return fixtureProvider.getOverview(environment, timeRange);
+      },
+      async getPerformance(environment, serviceId, timeRange) {
+        performanceRequests += 1;
+        return fixtureProvider.getPerformance(environment, serviceId, timeRange);
+      }
+    };
+    render(<MemoryRouter initialEntries={["/performance"]}><App provider={provider} /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "Performance & capacity" })).toBeInTheDocument();
+    expect(await screen.findByText("Prometheus telemetry")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Traffic & server errors" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Synthetic latency percentiles" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "JVM & process CPU" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Memory utilization" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Database saturation" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Pod restarts" })).toBeInTheDocument();
+    expect(screen.getByText("Requests in window")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Performance service" }), "cpq-demo");
+    expect(performanceRequests).toBeGreaterThanOrEqual(2);
+    const beforeRefresh = performanceRequests;
+    await user.click(screen.getByRole("button", { name: "Refresh monitoring data" }));
+    expect(await screen.findByText(/Refreshed/u)).toBeInTheDocument();
+    expect(performanceRequests).toBeGreaterThan(beforeRefresh);
+    expect(screen.getByRole("combobox", { name: "Performance service" })).toHaveValue("cpq-demo");
+  });
+
+  it("distinguishes a zero metric from no-data and query-error panel states", async () => {
+    const provider: MonitoringProvider = {
+      getOverview(environment, timeRange) {
+        return fixtureProvider.getOverview(environment, timeRange);
+      },
+      async getPerformance(environment, serviceId, timeRange) {
+        const fixture = await fixtureProvider.getPerformance(environment, serviceId, timeRange);
+        return {
+          ...fixture,
+          mode: "partial",
+          source: { name: "prometheus", availability: "partial", message: "2 queries unavailable" },
+          metrics: fixture.metrics.map((metric) => metric.id === "request-rate"
+            ? { ...metric, points: [{ timestamp: fixture.assembledAt, value: 0 }], latest: 0 }
+            : metric.id === "pod-restarts"
+              ? { ...metric, status: "no-data", points: [], latest: null, message: "No restart series" }
+              : metric.id === "process-cpu"
+                ? { ...metric, status: "error", points: [], latest: null, message: "Query timed out" }
+                : metric)
+        };
+      }
+    };
+    render(<MemoryRouter initialEntries={["/performance"]}><App provider={provider} /></MemoryRouter>);
+
+    expect(await screen.findByText("0.00 requests/s")).toBeInTheDocument();
+    expect(screen.getByText("No restart series")).toBeInTheDocument();
+    expect(screen.getByText("Query timed out")).toBeInTheDocument();
+    expect(screen.getByText("Partial Prometheus telemetry")).toBeInTheDocument();
   });
 
   it("shows all required fixture states in the settings gallery", async () => {

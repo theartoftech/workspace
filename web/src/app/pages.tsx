@@ -16,24 +16,14 @@ import {
   UsersThreeIcon,
   WarningCircleIcon
 } from "@phosphor-icons/react";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
+import { useEffect, useMemo, useState } from "react";
+import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Link, useParams } from "react-router-dom";
 
+import type { PerformanceMetric, PerformanceMetricId } from "../../../shared/performance";
 import { StateGallery } from "../components/StateGallery";
 import { StatusBadge } from "../components/StatusBadge";
-import type { OverviewSnapshot } from "../data/types";
+import type { MonitoringProvider, OverviewSnapshot, PerformanceSnapshot, TimeRange } from "../data/types";
 
 interface SnapshotPageProps {
   readonly snapshot: OverviewSnapshot;
@@ -339,29 +329,139 @@ export function InfrastructurePage(): React.JSX.Element {
   );
 }
 
-export function PerformancePage({ snapshot }: SnapshotPageProps): React.JSX.Element {
+interface PerformancePageProps extends SnapshotPageProps {
+  readonly provider: MonitoringProvider;
+  readonly timeRange: TimeRange;
+  readonly refreshKey: number;
+}
+
+const metricColors = ["#6f93ff", "#ef6f6c", "#f2a65a", "#46d6a0", "#ba8cff"] as const;
+
+function metric(snapshot: PerformanceSnapshot, id: PerformanceMetricId): PerformanceMetric | undefined {
+  return snapshot.metrics.find((item) => item.id === id);
+}
+
+function formattedMetric(item: PerformanceMetric | undefined): string {
+  if (item?.latest === null || item?.latest === undefined) return "No telemetry";
+  if (item.unit === "requests/s") return `${item.latest.toFixed(2)} requests/s`;
+  if (item.unit === "percent") return `${item.latest.toFixed(1)}%`;
+  if (item.unit === "milliseconds") return `${item.latest.toFixed(1)} ms`;
+  if (item.unit === "requests") return `${Math.round(item.latest).toLocaleString()} requests`;
+  return `${Math.round(item.latest)} restarts`;
+}
+
+function mergePerformancePoints(metrics: readonly PerformanceMetric[]): readonly Record<string, string | number>[] {
+  const rows = new Map<string, Record<string, string | number>>();
+  for (const item of metrics) {
+    if (item.status !== "ok") continue;
+    for (const point of item.points) {
+      const row = rows.get(point.timestamp) ?? { timestamp: point.timestamp };
+      row[item.id] = point.value;
+      rows.set(point.timestamp, row);
+    }
+  }
+  return [...rows.values()].sort((left, right) => String(left.timestamp).localeCompare(String(right.timestamp)));
+}
+
+function PerformanceChartPanel({ title, metrics, meta }: { readonly title: string; readonly metrics: readonly PerformanceMetric[]; readonly meta: string }): React.JSX.Element {
+  const available = metrics.filter((item) => item.status === "ok");
+  const data = mergePerformancePoints(available);
+  const threshold = available.find((item) => item.threshold !== null)?.threshold ?? null;
+  return (
+    <article className="panel performance-panel">
+      <PanelHeader title={title} meta={meta} />
+      {available.length > 0 && data.length > 0 ? (
+        <div className="small-chart" role="img" aria-label={`${title} time series from Prometheus`}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+              <CartesianGrid stroke="#25354a" vertical={false} />
+              <XAxis dataKey="timestamp" tickFormatter={(value: string) => new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} minTickGap={28} tick={{ fill: "#7790ad", fontSize: 9 }} />
+              <YAxis tick={{ fill: "#7790ad", fontSize: 9 }} width={42} />
+              <Tooltip labelFormatter={(value: React.ReactNode) => typeof value === "string" || typeof value === "number" ? new Date(value).toLocaleString() : "Unknown timestamp"} contentStyle={{ background: "#111e2f", border: "1px solid #31445e" }} />
+              <Legend />
+              {threshold !== null && <ReferenceLine y={threshold} stroke="#ef6f6c" strokeDasharray="4 4" label={{ value: `Threshold ${threshold}`, fill: "#ef9a98", fontSize: 9 }} />}
+              {available.map((item, index) => <Line key={item.id} type="monotone" dataKey={item.id} name={`${item.label} (${item.unit})`} stroke={metricColors[index % metricColors.length]} strokeWidth={2} dot={false} connectNulls={false} />)}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ) : <div className="telemetry-empty"><WarningCircleIcon aria-hidden="true" size={22} /><strong>No chart data</strong><span>{metrics[0]?.message ?? "Prometheus returned no samples for this selection."}</span></div>}
+      {available.length > 0 && metrics.some((item) => item.status !== "ok") && <div className="metric-diagnostics">{metrics.filter((item) => item.status !== "ok").map((item) => <p key={item.id}><strong>{item.label}:</strong> {item.message ?? "No telemetry"}</p>)}</div>}
+    </article>
+  );
+}
+
+export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: PerformancePageProps): React.JSX.Element {
+  const serviceOptions = snapshot.services;
+  const [serviceId, setServiceId] = useState("all");
+  const [performance, setPerformance] = useState<PerformanceSnapshot | null>(null);
+  const [performanceError, setPerformanceError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (serviceId !== "all" && !serviceOptions.some((service) => service.id === serviceId)) setServiceId("all");
+  }, [serviceId, serviceOptions]);
+
+  useEffect(() => {
+    let active = true;
+    setPerformance(null);
+    setPerformanceError(null);
+    provider.getPerformance(snapshot.environment, serviceId, timeRange)
+      .then((next) => { if (active) setPerformance(next); })
+      .catch((cause: unknown) => { if (active) setPerformanceError(cause instanceof Error ? cause.message : "Unknown performance provider error"); });
+    return () => { active = false; };
+  }, [provider, refreshKey, serviceId, snapshot.environment, timeRange]);
+
+  const selectedInventory = useMemo(
+    () => snapshot.services.find((service) => service.id === (serviceId === "all" ? "cpq-demo" : serviceId)),
+    [serviceId, snapshot.services]
+  );
+  const action = (
+    <label className="performance-service-control">
+      <span>Service</span>
+      <select aria-label="Performance service" value={serviceId} onChange={(event) => setServiceId(event.target.value)}>
+        <option value="all">All monitored services</option>
+        {serviceOptions.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+      </select>
+    </label>
+  );
+
   return (
     <>
-      <PageHeader eyebrow="Observability / Performance" title="Performance & capacity" description="Golden signals and resource trends across the selected environment." action={<button className="secondary-button" type="button">Export snapshot</button>} />
-      <section className="performance-grid">
-        <article className="panel performance-panel">
-          <PanelHeader title="Request throughput" meta="Requests per minute" />
-          <div className="small-chart" role="img" aria-label="Fixture request throughput chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={snapshot.traffic}><CartesianGrid stroke="#25354a" vertical={false} /><XAxis dataKey="time" hide /><YAxis hide /><Tooltip contentStyle={{ background: "#111e2f", border: "1px solid #31445e" }} /><Bar dataKey="requests" fill="#4f7cff" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div>
-        </article>
-        <article className="panel performance-panel">
-          <PanelHeader title="p95 latency" meta="Milliseconds" />
-          <div className="small-chart" role="img" aria-label="Fixture p95 latency chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={snapshot.traffic}><CartesianGrid stroke="#25354a" vertical={false} /><XAxis dataKey="time" hide /><YAxis hide /><Tooltip contentStyle={{ background: "#111e2f", border: "1px solid #31445e" }} /><Line type="monotone" dataKey="latency" stroke="#f2a65a" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div>
-        </article>
-        <article className="panel performance-panel">
-          <PanelHeader title="Error volume" meta="Errors per interval" />
-          <div className="small-chart" role="img" aria-label="Fixture error volume chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={snapshot.traffic}><CartesianGrid stroke="#25354a" vertical={false} /><XAxis dataKey="time" hide /><YAxis hide /><Tooltip contentStyle={{ background: "#111e2f", border: "1px solid #31445e" }} /><Area type="monotone" dataKey="errors" stroke="#ef6f6c" fill="#ef6f6c" fillOpacity={0.18} /></AreaChart></ResponsiveContainer></div>
-        </article>
-        <article className="panel performance-panel capacity-summary-panel">
-          <PanelHeader title="Capacity forecast" meta="Next threshold breach" />
-          <div className="forecast-value"><strong>11 days</strong><span>Memory pressure · cpqserver</span></div>
-          <div className="forecast-note"><WarningCircleIcon aria-hidden="true" size={18} /><span>Projected to reach 80% on Aug 23 if current growth continues.</span></div>
-        </article>
-      </section>
+      <PageHeader eyebrow="Observability / Performance" title="Performance & capacity" description="Live, bounded Prometheus traffic and resource telemetry across the selected scope." action={action} />
+      {performanceError !== null && <section className="performance-source performance-source-error" role="alert"><WarningCircleIcon aria-hidden="true" size={20} /><div><strong>Prometheus telemetry unavailable</strong><span>{performanceError}</span></div></section>}
+      {performance === null && performanceError === null && <section className="performance-source" role="status"><div><strong>Loading Prometheus telemetry</strong><span>Running bounded allow-listed queries…</span></div></section>}
+      {performance !== null && (
+        <>
+          <section className={`performance-source performance-source-${performance.source.availability}`} role="status">
+            <DatabaseIcon aria-hidden="true" size={20} />
+            <div><strong>{performance.mode === "partial" ? "Partial Prometheus telemetry" : "Prometheus telemetry"}<span className="source-pill">{performance.source.availability}</span></strong><span>Window {formattedTimestamp(performance.window.start)}–{formattedTimestamp(performance.window.end)} · {performance.window.stepSeconds}s resolution · max {performance.window.maxPoints} points</span>{performance.source.message && <small>{performance.source.message}</small>}</div>
+          </section>
+          <section className="metrics-grid" aria-label="Performance summary">
+            <MetricCard label="Request rate" value={formattedMetric(metric(performance, "request-rate"))} note="Health and scrape endpoints excluded" icon={TrendUpIcon} />
+            <MetricCard label="Server error rate" value={formattedMetric(metric(performance, "error-rate"))} note="HTTP server errors / request traffic" tone={(metric(performance, "error-rate")?.latest ?? 0) >= 1 ? "danger" : "positive"} icon={WarningCircleIcon} />
+            <MetricCard label="p95 latency" value={formattedMetric(metric(performance, "latency-p95"))} note="Synthetic checks across selected services" icon={GaugeIcon} />
+            <MetricCard label="Requests in window" value={formattedMetric(metric(performance, "request-total"))} note="Actual portfolio requests served by Nginx" icon={DatabaseIcon} />
+          </section>
+          <section className="performance-grid">
+            <PerformanceChartPanel title="Traffic & server errors" meta="requests/s and percent" metrics={[metric(performance, "request-rate"), metric(performance, "error-rate")].filter((item): item is PerformanceMetric => item !== undefined)} />
+            <PerformanceChartPanel title="Synthetic latency percentiles" meta="p50, p95, p99 · milliseconds" metrics={[metric(performance, "latency-p50"), metric(performance, "latency-p95"), metric(performance, "latency-p99")].filter((item): item is PerformanceMetric => item !== undefined)} />
+            <PerformanceChartPanel title="JVM & process CPU" meta="process and application-host utilization" metrics={[metric(performance, "process-cpu"), metric(performance, "system-cpu")].filter((item): item is PerformanceMetric => item !== undefined)} />
+            <PerformanceChartPanel title="Memory utilization" meta="JVM heap and lab host" metrics={[metric(performance, "jvm-heap"), metric(performance, "host-memory")].filter((item): item is PerformanceMetric => item !== undefined)} />
+            <PerformanceChartPanel title="Database saturation" meta="Hikari active / max connections" metrics={[metric(performance, "db-pool-saturation")].filter((item): item is PerformanceMetric => item !== undefined)} />
+            <PerformanceChartPanel title="Pod restarts" meta="Increase within each query interval" metrics={[metric(performance, "pod-restarts")].filter((item): item is PerformanceMetric => item !== undefined)} />
+          </section>
+          <article className="panel performance-correlation">
+            <PanelHeader title="CPQ Demo correlation" meta="Prometheus signals beside Sprint 2 workload evidence" />
+            {selectedInventory === undefined ? <p className="empty-panel-copy">CPQ Demo is outside the selected environment.</p> : (
+              <div className="correlation-grid">
+                <div><span>Inventory state</span><StatusBadge status={selectedInventory.state} /></div>
+                <div><span>Observed version</span><strong>{selectedInventory.version ?? "Unavailable"}</strong></div>
+                <div><span>Workloads</span><strong>{selectedInventory.workloads.length === 0 ? "No evidence" : selectedInventory.workloads.map((workload) => `${workload.ready ?? "?"}/${workload.desired ?? "?"} ${workload.name}`).join(", ")}</strong></div>
+                <div><span>Last workload check</span><strong>{formattedTimestamp(selectedInventory.lastCheckedAt)}</strong></div>
+              </div>
+            )}
+          </article>
+        </>
+      )}
     </>
   );
 }

@@ -86,9 +86,10 @@ class InventoryReaderRbacTests(unittest.TestCase):
         self.assertIn("name: workspace-monitor-inventory", manifest)
         self.assertIn('verbs: ["get"]', manifest)
         self.assertNotRegex(manifest, r'(?m)verbs:.*(?:create|update|patch|delete|watch|list)')
-        self.assertEqual(manifest.count("kind: RoleBinding"), 2)
+        self.assertEqual(manifest.count("kind: RoleBinding"), 3)
         self.assertIn("namespace: default", manifest)
         self.assertIn("namespace: cpq-test", manifest)
+        self.assertIn("namespace: public-site", manifest)
 
 
 if __name__ == "__main__":

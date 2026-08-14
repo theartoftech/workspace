@@ -21,6 +21,15 @@ describe("fixture monitoring provider", () => {
     expect(snapshot.summary.total).toBe(2);
   });
 
+  it("provides deterministic performance telemetry only for tests and previews", async () => {
+    const performance = await createFixtureMonitoringProvider().getPerformance("demo", "cpq-demo", "1h");
+
+    expect(performance.mode).toBe("live");
+    expect(performance.metrics.map((metric) => metric.id)).toContain("request-rate");
+    expect(performance.metrics.map((metric) => metric.id)).toContain("request-total");
+    expect(performance.source.name).toBe("prometheus");
+  });
+
   it("throws an explicit error for an unsupported environment", async () => {
     const provider = createFixtureMonitoringProvider();
 
@@ -66,5 +75,37 @@ describe("fixture monitoring provider", () => {
 
     await expect(malformed.getOverview("all", "1h")).rejects.toThrow("malformed");
     await expect(unavailable.getOverview("all", "1h")).rejects.toThrow("HTTP 503");
+  });
+
+  it("loads and validates live performance telemetry with encoded allow-listed filters", async () => {
+    const fetchImpl = vi.fn((): Promise<Response> => Promise.resolve(new Response(JSON.stringify({
+      apiVersion: 1,
+      mode: "live",
+      assembledAt: "2026-08-13T18:00:00Z",
+      observedAt: "2026-08-13T17:59:00Z",
+      environment: "demo",
+      serviceId: "cpq-demo",
+      window: { range: "1h", start: "2026-08-13T17:00:00Z", end: "2026-08-13T18:00:00Z", stepSeconds: 60, maxPoints: 61 },
+      source: { name: "prometheus", availability: "available", message: null },
+      metrics: [{ id: "request-rate", label: "Request rate", unit: "requests/s", status: "ok", points: [{ timestamp: "2026-08-13T17:59:00Z", value: 0 }], latest: 0, threshold: null, message: null }]
+    }), { status: 200 })));
+    const provider = createLiveMonitoringProvider({ fetchImpl, timeoutMs: 1000 });
+
+    const performance = await provider.getPerformance("demo", "cpq-demo", "1h");
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/performance?environment=demo&service=cpq-demo&range=1h",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(performance.metrics[0]).toMatchObject({ status: "ok", latest: 0 });
+  });
+
+  it("rejects malformed performance telemetry without substituting fixtures", async () => {
+    const provider = createLiveMonitoringProvider({
+      fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ apiVersion: 1, mode: "live" }), { status: 200 })),
+      timeoutMs: 1000
+    });
+
+    await expect(provider.getPerformance("all", "all", "1h")).rejects.toThrow("Performance API returned a malformed response");
   });
 });
