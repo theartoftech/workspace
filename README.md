@@ -1,8 +1,8 @@
 # Development Lab Observability
 
-This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 4 are complete and deployed: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, and read-only Kubernetes topology. Sprint 4 passed automated deployment verification and human UI acceptance on 2026-08-14.
+This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 5 are complete and deployed: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, read-only Kubernetes topology, and persistent alert-driven incident operations. Sprint 5 passed automated lab deployment verification on 2026-08-14; human UI acceptance remains pending.
 
-Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 5 alerts and incident operations are implemented and tested locally; lab deployment and human acceptance remain pending.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 5 alerts and incident operations are implemented, deployed, and automatically verified; human acceptance remains pending.
 
 ## Foundation scope
 
@@ -16,7 +16,7 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Portfolio request metrics | Private Nginx exporter sidecar with selected-window request totals and request rate |
 | Internal reachability | CPQ demo/test, OAuth demo/test, Mailpit, and ERPNet from the CPQ server |
 | Public-path simulation | Public CPQ demo and ERPNet URLs, including TLS expiry, from the same CPQ server—not an independent external vantage |
-| Incident operations | Persistent SQLite incidents, inventory-health alert evaluation, bounded silences, state transitions, runbooks, and audit history; lab deployment pending |
+| Incident operations | Deployed persistent SQLite incidents, inventory-health alert evaluation, bounded silences, state transitions, runbooks, and audit history |
 | Alert delivery | Explicitly unconfigured until notification destinations and credential handling are selected |
 
 Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Settings remains a preview. Per-user OIDC identity, notification delivery, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.

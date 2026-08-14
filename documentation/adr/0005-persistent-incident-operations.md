@@ -1,6 +1,6 @@
 # ADR 0005: Persistent alert and incident operations
 
-- Status: Accepted and tested locally; deployment pending
+- Status: Accepted, deployed, and automatically verified on 2026-08-14; human acceptance pending
 - Date: 2026-08-14
 - Sprint: 5 — Alerts and incident operations
 
