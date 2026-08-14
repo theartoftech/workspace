@@ -163,6 +163,7 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("server/src/main.js", dockerfile)
         self.assertIn("dockerfile: deploy/inventory-api/Dockerfile", api)
         self.assertIn('user: "10001:10001"', api)
+        self.assertIn('group_add:\n      - "${MONITORING_GID}"', api)
         self.assertIn("read_only: true", api)
         self.assertIn("no-new-privileges:true", api)
         self.assertIn("cap_drop:\n      - ALL", api)
@@ -172,8 +173,12 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("KUBERNETES_API_URL=https://192.168.86.246:6443", example_environment)
         self.assertIn("PROMETHEUS_API_URL: http://prometheus:9090", api)
         self.assertIn('PROMETHEUS_CONCURRENCY: "4"', api)
+        self.assertIn("INCIDENT_DATABASE_PATH: /var/lib/workspace-monitor/incidents.sqlite", api)
+        self.assertIn("INCIDENT_OPERATOR_ID: jhaynes", api)
+        self.assertIn('INCIDENT_EVALUATION_INTERVAL_SECONDS: "30"', api)
         self.assertIn("depends_on:\n      - prometheus", api)
         self.assertIn("runtime-secrets:/run/secrets:ro", api)
+        self.assertIn("${MONITORING_DATA_DIR}/incidents:/var/lib/workspace-monitor", api)
         self.assertIn("mem_limit: 128m", api)
         self.assertIn("cpus: 0.25", api)
 
@@ -211,6 +216,7 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("try_files $uri $uri/ /index.html", nginx)
         self.assertIn("location /api/", nginx)
         self.assertIn("proxy_pass http://inventory-api:3001", nginx)
+        self.assertIn("client_max_body_size 16k", nginx)
         self.assertIn("location /tools/gatus-internal/", nginx)
         self.assertIn("location /tools/gatus-public-path/", nginx)
         self.assertIn("public, max-age=31536000, immutable", nginx)
@@ -533,6 +539,8 @@ exit 1
         self.assertIn("--force-recreate gatus-internal gatus-public-path", source)
         self.assertIn("kubernetes_inventory_token", source)
         self.assertIn("/api/v1/topology?environment=all", source)
+        self.assertIn("/api/v1/incidents?environment=all&status=active", source)
+        self.assertIn('"state":"unconfigured"', source)
         self.assertIn('"apiVersion":1', source)
         self.assertIn('"serviceId":"cpq-demo"', source)
         self.assertIn('"id":"request-rate"', source)
@@ -543,6 +551,13 @@ exit 1
         self.assertIn("Prometheus telemetry", source)
         self.assertIn("Kubernetes inventory", source)
         self.assertIn("validate_portal_port", source)
+
+    def test_deploy_prepares_bounded_persistent_incident_storage(self) -> None:
+        source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('"$data_directory/incidents"', source)
+        self.assertIn('chmod 0770 "$data_directory/incidents"', source)
+        self.assertIn('chgrp "$(env_value MONITORING_GID)" "$data_directory/incidents"', source)
         self.assertIn("PORTAL_BUILD_REVISION", source)
 
     def test_remote_preflight_cleanup_exits_successfully(self) -> None:
@@ -613,6 +628,8 @@ elif [[ " $* " == *"/api/v1/performance?environment=demo&service=cpq-demo&range=
     printf '{"apiVersion":1,"serviceId":"cpq-demo","metrics":[{"id":"request-rate"}]}'
 elif [[ " $* " == *"/api/v1/performance?environment=portfolio&service=portfolio&range=1h"* ]]; then
     printf '{"apiVersion":1,"serviceId":"portfolio","metrics":[{"id":"request-total","status":"ok"}]}'
+elif [[ " $* " == *"/api/v1/incidents?environment=all&status=active"* ]]; then
+    printf '{"apiVersion":1,"alertSource":{"name":"inventory-health-evaluator"},"notification":{"state":"unconfigured"}}'
 elif [[ " $* " == *" http://127.0.0.1:3100/assets/"* ]]; then
     printf 'Live inventory Prometheus telemetry Kubernetes inventory'
 elif [[ " $* " == *" http://127.0.0.1:3100/"* && " $* " != *"/healthz"* ]]; then

@@ -203,28 +203,56 @@ describe("enterprise application shell", () => {
     expect(screen.queryByText("CPQ Demo")).not.toBeInTheDocument();
   });
 
-  it("selects, acknowledges, opens a runbook, and declares session incidents", async () => {
+  it("triages, acknowledges, declares, silences, resolves, and creates persistent incidents", async () => {
     const user = userEvent.setup();
     renderApp("/incidents");
 
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Incident status" }), "all");
     await user.click(await screen.findByRole("button", { name: /CPQ test readiness intermittently failing/u }));
     expect(screen.getByRole("heading", { name: "CPQ test readiness intermittently failing" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Acknowledge" }));
+    await user.type(screen.getByRole("textbox", { name: "Reason" }), "Taking ownership of investigation");
+    await user.click(screen.getByRole("button", { name: "Confirm acknowledge" }));
     expect(screen.getByText("Acknowledged by J. Haynes")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Open runbook" }));
     expect(screen.getByRole("dialog", { name: /CPQ Test runbook/u })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Close runbook" }));
 
+    await user.click(screen.getByRole("button", { name: "Declare alert as incident" }));
+    await user.type(screen.getByRole("textbox", { name: "Reason" }), "Customer impact requires incident command");
+    await user.click(screen.getByRole("button", { name: "Confirm declaration" }));
+    expect(screen.getByText("Declared by J. Haynes")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Silence" }));
+    await user.type(screen.getByRole("textbox", { name: "Reason" }), "Suppress duplicates during bounded validation");
+    await user.click(screen.getByRole("button", { name: "Confirm silence" }));
+    expect(screen.getByText(/Silenced until/u)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Resolve" }));
+    await user.type(screen.getByRole("textbox", { name: "Reason" }), "Health and workload evidence recovered");
+    await user.click(screen.getByRole("button", { name: "Confirm resolution" }));
+    expect(screen.getByText("resolved", { selector: ".incident-state" })).toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Declare incident" }));
     await user.type(screen.getByRole("textbox", { name: "Incident title" }), "Portfolio availability investigation");
-    await user.type(screen.getByRole("textbox", { name: "Affected service" }), "Portfolio");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Affected service" }), "portfolio");
     await user.selectOptions(screen.getByRole("combobox", { name: "Severity" }), "P2");
+    await user.type(screen.getByRole("textbox", { name: "Declaration reason" }), "Operator observed customer-facing errors");
     await user.click(screen.getByRole("button", { name: "Create incident" }));
     expect(screen.getByRole("heading", { name: "Portfolio availability investigation" })).toBeInTheDocument();
-    expect(screen.getByText("3 incidents")).toBeInTheDocument();
+    expect(await screen.findByText("3 incidents")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Acknowledge" })).toBeEnabled();
-    expect(screen.queryByText("Acknowledged by J. Haynes")).not.toBeInTheDocument();
+    expect(screen.getByText("Notification delivery is not configured in the deterministic fixture provider.")).toBeInTheDocument();
+  }, 10_000);
+
+  it("defaults declarations to a service in the selected environment", async () => {
+    const user = userEvent.setup();
+    renderApp("/incidents");
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Environment" }), "portfolio");
+    await screen.findByRole("heading", { name: "Incidents" });
+    await user.click(screen.getByRole("button", { name: "Declare incident" }));
+    expect(screen.getByRole("combobox", { name: "Affected service" })).toHaveValue("portfolio");
   });
 
   it("provides the Cloudflare Access logout endpoint", async () => {
@@ -270,11 +298,11 @@ describe("enterprise application shell", () => {
 
     await screen.findByRole("heading", { name: "Fleet overview" });
     await user.click(screen.getByRole("button", { name: "Open alerts, 2 active" }));
-    expect(screen.getByText("Keycloak p95 above SLO")).toBeInTheDocument();
+    expect(screen.getByText("OIDC token exchange latency above SLO")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open operator menu" }));
     expect(screen.getByRole("button", { name: "Operator profile" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
-    expect(screen.queryByText("Keycloak p95 above SLO")).not.toBeInTheDocument();
+    expect(screen.queryByText("OIDC token exchange latency above SLO")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Operator profile" })).not.toBeInTheDocument();
   });
 

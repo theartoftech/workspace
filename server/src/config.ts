@@ -15,6 +15,12 @@ export interface PrometheusRuntimeConfig {
   readonly concurrency: number;
 }
 
+export interface IncidentRuntimeConfig {
+  readonly databasePath: string;
+  readonly operatorId: string;
+  readonly evaluationIntervalSeconds: number;
+}
+
 export interface RuntimeConfig {
   readonly port: number;
   readonly catalogPath: string;
@@ -24,6 +30,7 @@ export interface RuntimeConfig {
   readonly gatusPublicPath: GatusRuntimeConfig;
   readonly kubernetes: KubernetesRuntimeConfig;
   readonly prometheus: PrometheusRuntimeConfig;
+  readonly incidents: IncidentRuntimeConfig;
 }
 
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -57,6 +64,26 @@ function nonempty(environment: Environment, name: string, fallback: string): str
   return value;
 }
 
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 31 || code === 127) return true;
+  }
+  return false;
+}
+
+function printable(environment: Environment, name: string, fallback: string, maximum: number): string {
+  const value = nonempty(environment, name, fallback).trim();
+  if (value.length > maximum || hasControlCharacter(value)) throw new Error(`${name} must contain at most ${maximum} printable characters`);
+  return value;
+}
+
+function databasePath(environment: Environment): string {
+  const value = printable(environment, "INCIDENT_DATABASE_PATH", "deploy/compose/lab-observability/data/incidents.sqlite", 1024);
+  if (value === ":memory:" || value.startsWith("file::memory:")) throw new Error("INCIDENT_DATABASE_PATH must use persistent filesystem storage");
+  return value;
+}
+
 export function parseRuntimeConfig(environment: Environment): RuntimeConfig {
   return {
     port: integer(environment, "INVENTORY_PORT", 3001, 1, 65_535),
@@ -74,6 +101,11 @@ export function parseRuntimeConfig(environment: Environment): RuntimeConfig {
     prometheus: {
       apiUrl: httpUrl(environment, "PROMETHEUS_API_URL", "http://prometheus:9090"),
       concurrency: integer(environment, "PROMETHEUS_CONCURRENCY", 4, 1, 8)
+    },
+    incidents: {
+      databasePath: databasePath(environment),
+      operatorId: printable(environment, "INCIDENT_OPERATOR_ID", "lab-operator", 100),
+      evaluationIntervalSeconds: integer(environment, "INCIDENT_EVALUATION_INTERVAL_SECONDS", 30, 15, 300)
     },
     kubernetes: {
       apiUrl: httpUrl(environment, "KUBERNETES_API_URL", "https://host.docker.internal:6443"),

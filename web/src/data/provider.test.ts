@@ -129,4 +129,59 @@ describe("fixture monitoring provider", () => {
     const malformed = createLiveMonitoringProvider({ fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ apiVersion: 1 }), { status: 200 })), timeoutMs: 1000 });
     await expect(malformed.getTopology?.("demo")).rejects.toThrow("Topology API returned a malformed response");
   });
+
+  it("loads persistent incidents and sends strict commands without a browser-selected actor", async () => {
+    const incident = {
+      id: "INC-000001", version: 1, title: "CPQ Demo is failing", description: "Live alert", serviceId: "cpq-demo",
+      serviceName: "CPQ Demo", environment: "demo", severity: "P1", status: "active", startedAt: "2026-08-14T14:00:00Z",
+      lastObservedAt: "2026-08-14T14:00:00Z", updatedAt: "2026-08-14T14:00:00Z", resolvedAt: null,
+      acknowledgedAt: null, acknowledgedBy: null, declaredAt: null, declaredBy: null, assignee: "Unassigned", owner: "Development Lab",
+      alertActive: true, recoveredAt: null, runbook: { id: "cpq-demo-response", title: "CPQ Demo response", steps: ["Confirm evidence."] },
+      evidence: [{ source: "gatus-internal", state: "failing", firstObservedAt: "2026-08-14T14:00:00Z", lastObservedAt: "2026-08-14T14:00:00Z", occurrences: 1, message: "Probe failed.", active: true }], silence: null
+    } as const;
+    const list = {
+      apiVersion: 1, mode: "live", assembledAt: "2026-08-14T14:00:00Z", environment: "all", statusFilter: "active",
+      truncated: false,
+      summary: { total: 1, active: 1, resolved: 0, unacknowledged: 1, silenced: 0 },
+      alertSource: { name: "inventory-health-evaluator", availability: "available", evaluatedAt: "2026-08-14T14:00:00Z", message: null },
+      notification: { state: "unconfigured", message: "No destination configured." },
+      operator: { id: "lab-operator", identityMode: "configured-lab-operator" }, incidents: [incident]
+    } as const;
+    const detail = { apiVersion: 1, assembledAt: list.assembledAt, notification: list.notification, operator: list.operator, incident, audit: [] } as const;
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(list), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(detail), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...detail, incident: { ...incident, version: 2, acknowledgedAt: list.assembledAt, acknowledgedBy: "lab-operator" } }), { status: 200 }));
+    const provider = createLiveMonitoringProvider({ fetchImpl, timeoutMs: 1000 });
+
+    expect(await provider.getIncidents?.("all", "active")).toMatchObject({ summary: { active: 1 }, incidents: [{ id: "INC-000001" }] });
+    await provider.declareIncident?.({ serviceId: "cpq-demo", title: "Operator declaration", severity: "P2", reason: "Confirmed impact" });
+    await provider.transitionIncident?.("INC-000001", { action: "acknowledge", expectedVersion: 1, reason: "Taking command" });
+
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, "/api/v1/incidents?environment=all&status=active", expect.objectContaining({ method: "GET" }));
+    expect(fetchImpl).toHaveBeenNthCalledWith(2, "/api/v1/incidents", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ serviceId: "cpq-demo", title: "Operator declaration", severity: "P2", reason: "Confirmed impact" })
+    }));
+    const declarationRequest = fetchImpl.mock.calls[1] as unknown as readonly [string, RequestInit] | undefined;
+    expect(declarationRequest?.[1].body).toBeTypeOf("string");
+    expect(declarationRequest?.[1].body).not.toContain("actor");
+    expect(fetchImpl).toHaveBeenNthCalledWith(3, "/api/v1/incidents/INC-000001/transitions", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("rejects malformed incident responses without fixture fallback", async () => {
+    const provider = createLiveMonitoringProvider({
+      fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ apiVersion: 1, incidents: [{}] }), { status: 200 })),
+      timeoutMs: 1000
+    });
+    await expect(provider.getIncidents?.("all", "active")).rejects.toThrow("Incident API returned a malformed response");
+  });
+
+  it("does not expose Shared as a selectable incident environment", async () => {
+    const fetchImpl = vi.fn((): Promise<Response> => Promise.resolve(new Response("{}", { status: 200 })));
+    const live = createLiveMonitoringProvider({ fetchImpl, timeoutMs: 1000 });
+    await expect(createFixtureMonitoringProvider().getIncidents?.("shared", "active")).rejects.toThrow("Unsupported incident filter");
+    await expect(live.getIncidents?.("shared", "active")).rejects.toThrow("Unsupported incident filter");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

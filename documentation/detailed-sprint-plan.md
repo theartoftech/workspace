@@ -33,7 +33,7 @@
 | 2 | Live deployment inventory | Deployed and user-verified | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
 | 3 | Traffic and performance | Complete, deployed, and user-verified | Inspect real request rate, errors, saturation, and latency graphs |
 | 4 | Infrastructure topology | Complete, deployed, and user-verified | Drill from an environment into workloads, nodes, and dependencies |
-| 5 | Alerts and incident operations | Planned | Persist, triage, acknowledge, silence, declare, and resolve alert-driven incidents |
+| 5 | Alerts and incident operations | Implemented and tested locally; deployment pending | Persist, triage, acknowledge, silence, declare, and resolve alert-driven incidents |
 | 6 | Logs and event correlation | Planned | Move from a failed service to relevant logs and Kubernetes events |
 | 7 | Enterprise identity and access | Planned | Sign in through OIDC and verify role-scoped actions and audit records |
 | 8 | Safe synthetic journeys | Planned | Run non-destructive CPQ/OAuth/Mailpit/ERPNet journeys and see step diagnostics |
@@ -285,7 +285,7 @@ Let operators understand how deployments map to clusters, namespaces, workloads,
 
 ### Status
 
-Planned; implementation requires explicit authorization. Incidents currently use session-only UI state and reset on reload. Notification destinations, credential storage, and the trusted source of operator identity remain design decisions rather than assumed integrations.
+Implemented and tested locally on 2026-08-14; lab deployment and human acceptance are pending. Notification delivery remains explicitly unconfigured. Until Sprint 7 adds OIDC and RBAC, mutations use one server-configured lab operator identity and reject browser-selected actor fields.
 
 ### Objective
 
@@ -296,11 +296,11 @@ Provide a focused operational workflow for active problems without becoming a fu
 - Persistent incident storage and a bounded incident API.
 - Live alert ingestion or server-owned alert evaluation with explicit source health.
 - Active and resolved alert inbox.
-- Severity, owner, environment, source, start time, duration, and related-service filters.
-- Persistent acknowledgement, declaration, resolution, silence, maintenance-window, and annotation workflows.
+- Active/resolved, environment, severity, and text triage controls with service, owner, source, start time, and evidence context.
+- Persistent acknowledgement, declaration, resolution, and bounded silence workflows.
 - Runbook associations and an append-only audit history.
 - Incident timeline assembled from monitoring events, state transitions, and operator annotations.
-- Notification destination and credential-handling design; no delivery channel is assumed before approval.
+- An explicit unconfigured notification state; destination selection, delivery, and credential storage require a separate approved design.
 
 ### Acceptance criteria
 
@@ -312,6 +312,22 @@ Provide a focused operational workflow for active problems without becoming a fu
 - Missing notification configuration is explicit. If delivery is later approved, delivery failure remains visible and never marks an incident resolved.
 - Representative alert, acknowledgement, silence-expiry, declaration, resolution, restart, duplicate-delivery, malformed-input, and partial-source sequences pass deterministic tests.
 - Server coverage remains at least 90%, including persistence failures and invalid transition branches.
+
+### Local verification
+
+- Alert evaluation groups a repeated service-health fingerprint while preserving per-source evidence and occurrence counts.
+- Recovery remains active for operator review; later alert recurrence and post-resolution evidence produce audited recurrence or reopening transitions.
+- Declarations and acknowledgement, declaration, silence, expiration, and resolution transitions commit incident state and exactly one audit record in one SQLite transaction.
+- Optimistic versions reject stale operators; unsupported, repeated, malformed, oversized, and out-of-order commands do not partially mutate state.
+- Incident reads are non-mutating. Evaluation runs at startup and on a non-overlapping bounded interval.
+- Server coverage is 99.21% statements/lines, 92.78% branches, and 98.54% functions across 81 tests.
+
+### Deployment acceptance still required
+
+- Confirm the host-mounted database remains intact across container replacement and restart.
+- Exercise the deployed API verifier and complete keyboard and browser acceptance against live lab evidence.
+- Define and test a recoverable SQLite backup/restore procedure before treating the lab incident database as durable operational recordkeeping.
+- Keep notification delivery unconfigured until destinations, credentials, retry semantics, and failure disclosure are explicitly approved.
 
 ### Failure modes to test
 

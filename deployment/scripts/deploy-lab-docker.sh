@@ -448,10 +448,12 @@ validate_portal_port() {
 prepare_runtime_data() {
     local data_directory
     data_directory="$(resolve_env_path "$(env_value MONITORING_DATA_DIR)")"
-    mkdir -p "$data_directory/gatus-internal" "$data_directory/gatus-public-path" "$data_directory/runtime-secrets"
+    mkdir -p "$data_directory/gatus-internal" "$data_directory/gatus-public-path" "$data_directory/runtime-secrets" "$data_directory/incidents"
     chmod 0755 "$data_directory/runtime-secrets"
-    [[ -w "$data_directory/gatus-internal" && -w "$data_directory/gatus-public-path" && -r "$data_directory/runtime-secrets" ]] || \
-        fail "Gatus data directories are not writable under: $data_directory"
+    chgrp "$(env_value MONITORING_GID)" "$data_directory/incidents"
+    chmod 0770 "$data_directory/incidents"
+    [[ -w "$data_directory/gatus-internal" && -w "$data_directory/gatus-public-path" && -r "$data_directory/runtime-secrets" && -w "$data_directory/incidents" ]] || \
+        fail "Monitoring data directories are not writable under: $data_directory"
 }
 
 validate_kubernetes_credential() {
@@ -528,6 +530,11 @@ verify_portal_routes() {
     grep -Fq '"serviceId":"portfolio"' <<< "$portfolio_performance" || fail "Performance API response did not retain the portfolio service."
     grep -Eq '"id":"request-total"[^}]*"status":"ok"' <<< "$portfolio_performance" || \
         fail "Portfolio request-total telemetry is unavailable; deploy the private Nginx exporter before the monitoring stack."
+    local incidents
+    incidents="$(fetch_http "Incident API" "http://127.0.0.1:3100/api/v1/incidents?environment=all&status=active")"
+    grep -Fq '"apiVersion":1' <<< "$incidents" || fail "Incident API response has no supported API version."
+    grep -Fq '"name":"inventory-health-evaluator"' <<< "$incidents" || fail "Incident API response is missing its live alert source."
+    grep -Fq '"state":"unconfigured"' <<< "$incidents" || fail "Incident API must disclose that notifications are unconfigured."
     local source_evidence
     source_evidence="$(fetch_http "Internal Gatus evidence proxy" "http://127.0.0.1:3100/tools/gatus-internal/api/v1/endpoints/statuses")"
     grep -Fq 'cpq-demo-ready-internal' <<< "$source_evidence" || fail "Internal Gatus evidence proxy is missing CPQ Demo."

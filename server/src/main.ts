@@ -5,6 +5,7 @@ import { loadCatalog } from "./catalog";
 import { parseRuntimeConfig } from "./config";
 import { GatusAdapter } from "./gatus";
 import { FetchJsonHttpClient } from "./http";
+import { IncidentOperationsService, SqliteIncidentRepository } from "./incidents";
 import { InventoryAggregator } from "./inventory";
 import { KubernetesAdapter } from "./kubernetes";
 import { PrometheusPerformanceReader } from "./prometheus";
@@ -67,21 +68,48 @@ async function run(): Promise<void> {
     new GatusAdapter("gatus-public-path", config.gatusPublicPath.apiUrl, config.gatusPublicPath.toolUrl, client, config.staleAfterSeconds),
     await kubernetesCollector(config, client)
   ];
+  const inventory = new InventoryAggregator(catalog, collectors);
+  const incidentRepository = new SqliteIncidentRepository({
+    databasePath: config.incidents.databasePath,
+    catalog,
+    operatorId: config.incidents.operatorId
+  });
+  const incidentService = new IncidentOperationsService({ repository: incidentRepository, inventoryReader: inventory });
+  let evaluationActive = false;
+  const evaluateIncidents = async (): Promise<void> => {
+    if (evaluationActive) return;
+    evaluationActive = true;
+    try {
+      await incidentService.evaluate();
+    } finally {
+      evaluationActive = false;
+    }
+  };
+  await evaluateIncidents();
+  const evaluationTimer = setInterval(() => { void evaluateIncidents(); }, config.incidents.evaluationIntervalSeconds * 1000);
   const server = createInventoryHttpServer(
-    new InventoryAggregator(catalog, collectors),
+    inventory,
     new PrometheusPerformanceReader({
       apiUrl: config.prometheus.apiUrl,
       catalog,
       client,
       concurrency: config.prometheus.concurrency
     }),
-    await topologyReader(config, catalog, client)
+    await topologyReader(config, catalog, client),
+    incidentService
   );
   server.listen(config.port, "0.0.0.0", () => {
     process.stdout.write(`Workspace Monitor inventory API listening on port ${config.port}\n`);
   });
   const shutdown = (): void => {
+    clearInterval(evaluationTimer);
     server.close((error) => {
+      try {
+        incidentRepository.close();
+      } catch (cause: unknown) {
+        process.stderr.write(`Incident database shutdown failed: ${cause instanceof Error ? cause.message : "unknown error"}\n`);
+        process.exitCode = 1;
+      }
       if (error) {
         process.stderr.write(`Inventory API shutdown failed: ${error.message}\n`);
         process.exitCode = 1;

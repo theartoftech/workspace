@@ -13,13 +13,13 @@ Add a read-only Node inventory API behind the portal's same-origin Nginx boundar
 
 Each upstream has a three-second deadline. Gatus collectors run concurrently, and Kubernetes workload reads use a bounded worker pool. Aggregation uses `Promise.allSettled`, so a failed source becomes an explicit `unavailable` source record while successful observations remain visible. Diagnostics pass through credential, token, URL-userinfo, query-secret, and sensitive-header redaction.
 
-The API exposes only `GET` and `HEAD` routes. Operator-facing environment selections are `demo`, `test`, `portfolio`, and `all`; `shared` remains an internal catalog classification whose services are included in applicable scopes rather than a separate operator environment.
+The inventory evidence surface exposes only `GET` and `HEAD` routes. Operator-facing environment selections are `demo`, `test`, `portfolio`, and `all`; `shared` remains an internal catalog classification whose services are included in applicable scopes rather than a separate operator environment.
 
 - `/api/v1/inventory?environment=all|demo|test|portfolio`
 - `/api/v1/services/<catalog-service-id>`
 - `/healthz`
 
-All other methods return `405`. Responses use `no-store`. The browser's live provider has its own five-second deadline, validates the response shape, and never falls back to fixtures. Overview, deployment, service-detail, performance, and infrastructure screens now use live evidence. Incident interactions remain session-only until Sprint 5, and Settings remains a preview.
+All other inventory methods return `405`. Responses use `no-store`. The browser's live provider has its own five-second deadline, validates the response shape, and never falls back to fixtures. Overview, deployment, service-detail, performance, infrastructure, and incident screens now use live evidence. ADR 0005 defines the separate, strict incident POST command surface; Settings remains a preview.
 
 Kubernetes access uses a token file mounted from the host, never an environment variable. ADR 0004 expanded the checked-in RBAC to namespace-bounded `get`/`list` access for a fixed topology allow-list in `default`, `cpq-test`, and `public-site`, plus narrowly scoped read access for Nodes and named Namespaces. When that token is absent, unreadable, empty, expired, or rejected, the API stays available in `partial` mode and Kubernetes-mapped services cannot appear healthy solely from missing workload evidence.
 

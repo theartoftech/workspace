@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import { createLiveMonitoringProvider } from "../data/provider";
-import type { EnvironmentId, MonitoringProvider, OverviewSnapshot, TimeRange } from "../data/types";
+import type { EnvironmentId, IncidentListResponse, MonitoringProvider, OverviewSnapshot, TimeRange } from "../data/types";
 import {
   DeploymentsPage,
   IncidentsPage,
@@ -95,7 +95,7 @@ function CommandSearch({ onClose, services }: { readonly onClose: () => void; re
   );
 }
 
-function Sidebar({ open, onClose, snapshot }: { readonly open: boolean; readonly onClose: () => void; readonly snapshot: OverviewSnapshot | null }): React.JSX.Element {
+function Sidebar({ open, onClose, snapshot, activeIncidentCount }: { readonly open: boolean; readonly onClose: () => void; readonly snapshot: OverviewSnapshot | null; readonly activeIncidentCount: number | null }): React.JSX.Element {
   const sourceCount = snapshot?.sources.filter((source) => source.availability === "available").length ?? 0;
   return (
     <aside className={`sidebar ${open ? "sidebar-open" : ""}`} aria-label="Primary navigation">
@@ -115,7 +115,7 @@ function Sidebar({ open, onClose, snapshot }: { readonly open: boolean; readonly
           const Icon = item.icon;
           return (
             <NavLink key={item.path} to={item.path} end={item.path === "/"} aria-label={item.label} onClick={onClose}>
-              {({ isActive }) => <><Icon aria-hidden={true} size={19} weight={isActive ? "fill" : "regular"} /><span>{item.label}</span>{item.label === "Incidents" && <b aria-hidden="true">2</b>}</>}
+              {({ isActive }) => <><Icon aria-hidden={true} size={19} weight={isActive ? "fill" : "regular"} /><span>{item.label}</span>{item.label === "Incidents" && activeIncidentCount !== null && activeIncidentCount > 0 && <b aria-hidden="true">{activeIncidentCount}</b>}</>}
             </NavLink>
           );
         })}
@@ -151,14 +151,18 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
   const [environment, setEnvironment] = useState<EnvironmentId>("all");
   const [timeRange, setTimeRange] = useState<TimeRange>("1h");
   const [snapshot, setSnapshot] = useState<OverviewSnapshot | null>(null);
+  const [activeIncidents, setActiveIncidents] = useState<IncidentListResponse | null>(null);
+  const [incidentError, setIncidentError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [operatorOpen, setOperatorOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [incidentRefreshKey, setIncidentRefreshKey] = useState(0);
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     let active = true;
@@ -174,8 +178,25 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
     return () => { active = false; };
   }, [environment, provider, timeRange]);
 
+  useEffect(() => {
+    let active = true;
+    if (provider.getIncidents === undefined) {
+      setActiveIncidents(null);
+      setIncidentError("Persistent incident operations are not configured.");
+      return () => { active = false; };
+    }
+    setIncidentError(null);
+    void provider.getIncidents(environment, "active")
+      .then((response) => { if (active) setActiveIncidents(response); })
+      .catch((cause: unknown) => {
+        if (active) { setActiveIncidents(null); setIncidentError(cause instanceof Error ? cause.message : "Unknown incident provider error"); }
+      });
+    return () => { active = false; };
+  }, [environment, incidentRefreshKey, provider]);
+
   function refreshMonitoringData(): void {
     setRefreshKey((value) => value + 1);
+    setIncidentRefreshKey((value) => value + 1);
     setRefreshedAt(new Date());
     setError(null);
     void provider.getOverview(environment, timeRange)
@@ -211,7 +232,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to monitoring content</a>
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} snapshot={snapshot} />
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} snapshot={snapshot} activeIncidentCount={activeIncidents?.summary.active ?? null} />
       {sidebarOpen && <button className="sidebar-scrim" type="button" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <div className="workspace">
         <header className="topbar">
@@ -229,8 +250,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
               {refreshedAt !== null && <span aria-live="polite">Refreshed {refreshedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}
             </div>
             <div className="popover-anchor">
-              <button className="icon-button notification-button" type="button" aria-label="Open alerts, 2 active" aria-expanded={alertsOpen} onClick={() => setAlertsOpen((value) => !value)}><BellIcon aria-hidden="true" size={20} /><span>2</span></button>
-              {alertsOpen && <div className="utility-popover alerts-popover"><strong>Active alerts</strong><button type="button"><span className="alert-dot alert-dot-critical" />Keycloak p95 above SLO<small>12 sec ago</small></button><button type="button"><span className="alert-dot alert-dot-warning" />CPQ test readiness<small>24 sec ago</small></button></div>}
+              <button className="icon-button notification-button" type="button" aria-label={`Open alerts, ${activeIncidents?.summary.active ?? 0} active`} aria-expanded={alertsOpen} onClick={() => setAlertsOpen((value) => !value)}><BellIcon aria-hidden="true" size={20} />{(activeIncidents?.summary.active ?? 0) > 0 && <span>{activeIncidents?.summary.active}</span>}</button>
+              {alertsOpen && <div className="utility-popover alerts-popover"><strong>Active alerts</strong>{incidentError !== null ? <p>{incidentError}</p> : activeIncidents === null ? <p>Loading incidents…</p> : activeIncidents.incidents.length === 0 ? <p>No active incidents.</p> : activeIncidents.incidents.slice(0, 5).map((incident) => <button type="button" key={incident.id} onClick={() => { setAlertsOpen(false); void navigate("/incidents"); }}><span className={`alert-dot alert-dot-${incident.severity === "P1" ? "critical" : "warning"}`} />{incident.title}<small>{incident.serviceName} · {incident.severity}</small></button>)}</div>}
             </div>
             <div className="popover-anchor operator-anchor">
               <button className="operator-button" type="button" aria-label="Open operator menu" aria-expanded={operatorOpen} onClick={() => setOperatorOpen((value) => !value)}><span>JH</span><div><strong>J. Haynes</strong><small>Administrator</small></div><CaretDownIcon aria-hidden="true" size={13} /></button>
@@ -243,8 +264,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
           <p>{snapshot?.mode === "fixture"
             ? "This test shell uses deterministic Sprint 1 data."
             : snapshot?.mode === "partial"
-              ? "Available sources stay live and unavailable sources are explicit. Incidents are session-only until the incident API sprint."
-              : "Overview, deployments, service details, performance, and infrastructure topology use live read-only sources. Incidents are session-only until the incident API sprint."}</p>
+              ? "Available sources stay live and unavailable sources are explicit. Persistent incidents retain their independent source status."
+              : "Inventory, performance, topology, and persistent incident operations use live server APIs."}</p>
           <small>{snapshot ? `Snapshot ${new Date(snapshot.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading snapshot"}</small>
         </div>
         <main id="main-content" tabIndex={-1}>
@@ -255,7 +276,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
               <Route path="/deployments" element={<DeploymentsPage snapshot={routeSnapshot} />} />
               <Route path="/infrastructure" element={<InfrastructurePage snapshot={routeSnapshot} provider={provider} environment={environment} refreshKey={refreshKey} />} />
               <Route path="/performance" element={<PerformancePage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
-              <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} />} />
+              <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} provider={provider} environment={environment} refreshKey={incidentRefreshKey} onMutated={() => setIncidentRefreshKey((value) => value + 1)} />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<ErrorShell message="The requested monitoring route does not exist." />} />
             </Routes>

@@ -41,6 +41,8 @@ services:
     image: "workspace-monitor-inventory-api:${PORTAL_BUILD_REVISION:-development}"
     restart: unless-stopped
     user: "10001:10001"
+    group_add:
+      - "${MONITORING_GID}"
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -56,6 +58,9 @@ services:
       KUBERNETES_TOOL_URL: "#kubernetes-api-no-browser-link"
       PROMETHEUS_API_URL: http://prometheus:9090
       PROMETHEUS_CONCURRENCY: "4"
+      INCIDENT_DATABASE_PATH: /var/lib/workspace-monitor/incidents.sqlite
+      INCIDENT_OPERATOR_ID: jhaynes
+      INCIDENT_EVALUATION_INTERVAL_SECONDS: "30"
       NODE_EXTRA_CA_CERTS: /run/kubernetes-ca/server-ca.crt
     depends_on:
       - prometheus
@@ -63,6 +68,7 @@ services:
       - host.docker.internal:host-gateway
     volumes:
       - ${MONITORING_DATA_DIR}/runtime-secrets:/run/secrets:ro
+      - ${MONITORING_DATA_DIR}/incidents:/var/lib/workspace-monitor
       - ${KUBERNETES_HOST_CA_FILE:-/var/lib/rancher/k3s/server/tls/server-ca.crt}:/run/kubernetes-ca/server-ca.crt:ro
     tmpfs:
       - /tmp:size=16m,mode=1777

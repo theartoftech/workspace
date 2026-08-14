@@ -18,6 +18,7 @@ The primary upskilling deployment is one Docker Compose stack on the same Ubuntu
 - Remote Kubernetes synchronization contains only the deployment script and Helm chart.
 - Remote Gatus synchronization contains only its script, Compose/config files, and non-secret example environment file.
 - Runtime `.env` files and SQLite databases are never transferred from the workstation or committed to Git.
+- Incident SQLite data stays under the host runtime data directory and is excluded from deployment archives.
 - Kubernetes bearer tokens are read only from a host-mounted runtime file; they are never placed in Compose environment variables or synchronized archives.
 
 ## Primary single-host lab profile
@@ -64,6 +65,8 @@ MONITORING_ENV_FILE=/home/jhaynes/workspace-monitor/runtime/lab-docker/.env
 ```
 
 Set `MONITORING_UID` and `MONITORING_GID` from `id -u` and `id -g`. Create the Grafana password file with a password-manager-generated value, owned by that UID/GID, and mode `0640`. Grafana remains UID 472 and receives the monitoring host group as a supplementary group solely to read this file. Sprint 0 does not require SMTP or webhook credentials; notification delivery is deferred until the integration design is reviewed.
+
+The deploy action creates `${MONITORING_DATA_DIR}/incidents` with group-write access for the unprivileged API container and stores `incidents.sqlite` there. Plan, preflight, status, verify, and logs do not create or modify that directory. Container replacement must preserve it. The database contains operational history rather than infrastructure credentials, but it can contain operator-entered reasons and must not be copied into deployment archives, logs, screenshots, or Git. Notification credentials are not configured or accepted by Sprint 5.
 
 ### Required live Kubernetes evidence
 
@@ -134,7 +137,7 @@ Before Sprint 1.1 cutover, the user-managed tunnel continues to route `monitor.j
 The implemented deployment and operator-controlled cutover sequence is intentionally reversible:
 
 1. Deploy the portal and inventory API containers without changing Cloudflare.
-2. Verify `/healthz`, `/api/v1/inventory`, all primary routes, live/partial disclosure, resource limits, and existing Grafana/monitoring health over loopback.
+2. Verify `/healthz`, `/api/v1/inventory`, `/api/v1/incidents`, all primary routes, live/partial disclosure, resource limits, and existing Grafana/monitoring health over loopback.
 3. Confirm that the Cloudflare Access policy is active for `monitor.jefferyhaynes.net`.
 4. Change the user-managed tunnel origin from `http://localhost:3000` to `http://localhost:3100`.
 5. Verify public TLS, Access enforcement, and portal navigation.

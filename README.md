@@ -2,7 +2,7 @@
 
 This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 4 are complete and deployed: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, and read-only Kubernetes topology. Sprint 4 passed automated deployment verification and human UI acceptance on 2026-08-14.
 
-Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 5, alerts and incident operations, is the next planned increment and has not been authorized for implementation.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 5 alerts and incident operations are implemented and tested locally; lab deployment and human acceptance remain pending.
 
 ## Foundation scope
 
@@ -16,9 +16,10 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Portfolio request metrics | Private Nginx exporter sidecar with selected-window request totals and request rate |
 | Internal reachability | CPQ demo/test, OAuth demo/test, Mailpit, and ERPNet from the CPQ server |
 | Public-path simulation | Public CPQ demo and ERPNet URLs, including TLS expiry, from the same CPQ server—not an independent external vantage |
-| Alert delivery | Deferred until notification destinations and credential handling are selected |
+| Incident operations | Persistent SQLite incidents, inventory-health alert evaluation, bounded silences, state transitions, runbooks, and audit history; lab deployment pending |
+| Alert delivery | Explicitly unconfigured until notification destinations and credential handling are selected |
 
-Overview, deployments, service detail, and infrastructure topology use live inventory. Performance uses live Prometheus range queries. Incident selection, acknowledgment, runbooks, and declaration work for the current browser session and are explicitly labeled non-persistent until the incident API sprint. Settings remains a preview. SSO, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.
+Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Settings remains a preview. Per-user OIDC identity, notification delivery, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.
 
 ## Repository layout
 
@@ -34,6 +35,7 @@ Overview, deployments, service detail, and infrastructure topology use live inve
 - `deployment/scripts` — guarded plan, preflight, deploy, status, and verification commands.
 - `deployment/PORTAL_ROLLBACK.md` — independent portal-image and Cloudflare-origin rollback procedures.
 - `documentation/adr/0004-kubernetes-topology-architecture.md` — bounded topology API, issue taxonomy, UI scaling, and RBAC decision.
+- `documentation/adr/0005-persistent-incident-operations.md` — incident persistence, evaluation, mutation, identity, and notification boundaries.
 - `deployment/ENVIRONMENTS.md` — target topology, secret preparation, and operator workflow.
 - `probes/internal` — Gatus node intended to run inside the lab network.
 - `probes/external` — Gatus node intended to run on an independent public host.
@@ -51,6 +53,8 @@ npm run build:server
 GATUS_INTERNAL_API_URL=http://192.168.86.246:8085/api/v1/endpoints/statuses \
 GATUS_PUBLIC_PATH_API_URL=http://192.168.86.246:8186/api/v1/endpoints/statuses \
 PROMETHEUS_API_URL=http://192.168.86.246:9090 \
+INCIDENT_DATABASE_PATH=/tmp/workspace-monitor-incidents.sqlite \
+INCIDENT_OPERATOR_ID=local-operator \
   node dist-server/server/src/main.js
 ```
 
@@ -74,7 +78,7 @@ npm run lint
 npm run build
 ```
 
-The live route set includes Overview, Deployments, Infrastructure, Performance, and `/services/<catalog-id>`. Incident interactions remain session-only and reset on reload; Settings remains a preview. The API accepts only GET/HEAD; topology inventory is server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives infrastructure credentials or arbitrary PromQL access.
+The live route set includes Overview, Deployments, Infrastructure, Performance, Incidents, and `/services/<catalog-id>`. Settings remains a preview. Monitoring evidence routes accept only GET/HEAD. The incident surface adds strict, bounded POST commands for declarations and state transitions; it never accepts a browser-selected actor. Topology inventory is server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives infrastructure credentials or arbitrary PromQL access.
 
 ## Verification criteria
 
@@ -179,6 +183,9 @@ Use `deployment/scripts/deploy-gatus.sh` for guarded local or SSH-based plan, pr
 - Missing, expired, or rejected Kubernetes credentials produce explicit partial inventory and never a false healthy state.
 - Gatus and Kubernetes requests have deadlines; Kubernetes reads use bounded concurrency.
 - Prometheus requests have deadlines and bounded concurrency; public inputs select only allow-listed query templates and fixed query windows.
+- Incident lists, request bodies, silence durations, audit history, evaluator cadence, and state transitions are bounded and validated server-side.
+- Repeated alert evidence is grouped; stale versions and invalid or repeated transitions fail atomically without partial audit writes.
+- Missing notification configuration and failed live alert evaluation remain explicit and cannot produce a false resolution.
 - Credentials, sensitive headers, URL userinfo, and secret query values are redacted from diagnostics.
 - Credentials, sensitive query keys, invalid URLs, and TLS checks on plain HTTP are rejected.
 - Probe timeout must remain shorter than its interval.
@@ -190,4 +197,4 @@ Use `deployment/scripts/deploy-gatus.sh` for guarded local or SSH-based plan, pr
 
 ## Operational caveats
 
-The Docker lab stack shares the CPQ server's CPU, memory, disk, Docker daemon, network, and power. A host failure therefore removes both the application and its monitoring. cAdvisor also receives privileged, read-only host visibility; that exception is appropriate only for this controlled lab. The public-path Gatus process is not an independent external monitor. The cloud path must use separate failure domains, replicated storage, backups, and independent probes before it is called production-grade.
+The Docker lab stack shares the CPQ server's CPU, memory, disk, Docker daemon, network, and power. A host failure therefore removes both the application and its monitoring. Incident SQLite data uses a host-mounted runtime directory, but lab backup and restore have not yet been operationally certified. cAdvisor also receives privileged, read-only host visibility; that exception is appropriate only for this controlled lab. The public-path Gatus process is not an independent external monitor. The cloud path must use separate failure domains, replicated storage, backups, and independent probes before it is called production-grade.

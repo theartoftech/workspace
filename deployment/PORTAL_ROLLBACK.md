@@ -1,6 +1,6 @@
-# Portal and inventory API deployment and rollback runbook
+# Portal and operations API deployment and rollback runbook
 
-This runbook covers the Sprint 2 lab portal and matching read-only inventory API. It does not delete containers, images, volumes, monitoring data, or credentials. Cloudflare tunnel and Access changes remain user-managed and are never performed by repository scripts.
+This runbook covers the lab portal and matching operations API. Monitoring evidence routes remain read-only; Sprint 5 adds bounded incident command routes. The runbook does not delete containers, images, volumes, incident history, monitoring data, or credentials. Cloudflare tunnel and Access changes remain user-managed and are never performed by repository scripts.
 
 ## Record before deployment
 
@@ -35,10 +35,10 @@ Do not change Cloudflare until all checks pass:
 ./deployment/scripts/deploy-lab-docker.sh verify \
   --host 192.168.86.246 --ssh-user jhaynes
 ssh jhaynes@192.168.86.246 \
-  'curl -fsS http://127.0.0.1:3100/healthz && curl -fsS "http://127.0.0.1:3100/api/v1/inventory?environment=all" && curl -fsS http://127.0.0.1:3000/api/health'
+  'curl -fsS http://127.0.0.1:3100/healthz && curl -fsS "http://127.0.0.1:3100/api/v1/inventory?environment=all" && curl -fsS "http://127.0.0.1:3100/api/v1/incidents?environment=all&status=active" && curl -fsS http://127.0.0.1:3000/api/health'
 ```
 
-The first URL must return `healthy`; the second confirms that Grafana remains available. Review the portal at `http://localhost:3100` through an SSH tunnel before changing the public origin.
+Health must return `healthy`; inventory and incidents must return versioned JSON envelopes; Grafana health must remain available. Review the portal at `http://localhost:3100` through an SSH tunnel before changing the public origin.
 
 ## Cloudflare cutover
 
@@ -77,7 +77,7 @@ MONITORING_ENV_FILE=/home/jhaynes/workspace-monitor/runtime/lab-docker/.env \
   up -d --no-deps --no-build inventory-api portal
 ```
 
-Re-run `/healthz`, `/api/v1/inventory`, and all primary-route checks. The monitoring services and their volumes are not recreated by this command. If the prior revision predates Sprint 2 and has no inventory API image, restore that fixture portal alone and verify its global fixture disclosure before cutover.
+Re-run `/healthz`, `/api/v1/inventory`, `/api/v1/incidents` when supported by the selected revision, and all primary-route checks. The monitoring services, their volumes, and `${MONITORING_DATA_DIR}/incidents` are not recreated or removed by this command. A pre-Sprint-5 API will not read the incident database, but rollback must preserve it for a later compatible revision. If the prior revision predates Sprint 2 and has no inventory API image, restore that fixture portal alone and verify its global fixture disclosure before cutover.
 
 After the prior portal has passed verification, record the restored revision:
 

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { InventorySnapshot } from "../../shared/inventory";
+import type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListResponse, IncidentSummary, IncidentTransitionCommand } from "../../shared/incidents";
 import type { PerformanceSnapshot } from "../../shared/performance";
 import type { TopologySnapshot } from "../../shared/topology";
-import { createInventoryHttpServer, handleInventoryRequest, safeNodeRequestMethod, type InventoryReader, type PerformanceReader } from "../src/api";
+import { createInventoryHttpServer, handleInventoryRequest, safeNodeRequestMethod, type IncidentOperations, type InventoryReader, type PerformanceReader } from "../src/api";
+import { IncidentRequestError } from "../src/incidents";
 import { InventoryAggregator } from "../src/inventory";
 import { PerformanceRequestError } from "../src/prometheus";
 import type { TopologyReader } from "../src/topology";
@@ -34,8 +36,52 @@ const topologyReader: TopologyReader = {
   }
 };
 
-function request(path: string, method = "GET", inventoryReader: InventoryReader = reader, metricsReader: PerformanceReader = performanceReader): Promise<Response> {
-  return handleInventoryRequest(new Request(`http://inventory-api.local${path}`, { method }), inventoryReader, metricsReader, topologyReader);
+const incidentSummary: IncidentSummary = {
+  id: "INC-000001", version: 1, title: "CPQ Demo is failing", description: "Live alert", serviceId: "cpq-demo",
+  serviceName: "CPQ Demo", environment: "demo", severity: "P1", status: "active", startedAt: "2026-08-14T14:00:00Z",
+  lastObservedAt: "2026-08-14T14:00:00Z", updatedAt: "2026-08-14T14:00:00Z", resolvedAt: null,
+  acknowledgedAt: null, acknowledgedBy: null, declaredAt: null, declaredBy: null, assignee: "Unassigned", owner: "Development Lab",
+  alertActive: true, recoveredAt: null, runbook: { id: "cpq-demo-incident-response", title: "CPQ Demo response", steps: ["Confirm evidence."] },
+  evidence: [], silence: null
+};
+const incidentList: IncidentListResponse = {
+  apiVersion: 1, mode: "live", assembledAt: "2026-08-14T14:00:00Z", environment: "all", statusFilter: "active",
+  truncated: false,
+  summary: { total: 1, active: 1, resolved: 0, unacknowledged: 1, silenced: 0 },
+  alertSource: { name: "inventory-health-evaluator", availability: "available", evaluatedAt: "2026-08-14T14:00:00Z", message: null },
+  notification: { state: "unconfigured", message: "No destination configured." },
+  operator: { id: "lab-operator", identityMode: "configured-lab-operator" }, incidents: [incidentSummary]
+};
+const incidentDetail: IncidentDetailResponse = {
+  apiVersion: 1, assembledAt: "2026-08-14T14:00:00Z", notification: incidentList.notification, operator: incidentList.operator,
+  incident: incidentSummary, audit: []
+};
+const incidentOperations: IncidentOperations = {
+  list(environment, statusFilter): Promise<IncidentListResponse> {
+    return Promise.resolve({ ...incidentList, environment: environment as "all", statusFilter: statusFilter as "active" });
+  },
+  getDetail(): Promise<IncidentDetailResponse> { return Promise.resolve(incidentDetail); },
+  declare(command: DeclareIncidentCommand): Promise<IncidentDetailResponse> {
+    return Promise.resolve({ ...incidentDetail, incident: { ...incidentSummary, title: command.title, severity: command.severity } });
+  },
+  transition(_id: string, command: IncidentTransitionCommand): Promise<IncidentDetailResponse> {
+    return Promise.resolve({ ...incidentDetail, incident: { ...incidentSummary, version: command.expectedVersion + 1 } });
+  }
+};
+
+function request(
+  path: string,
+  method = "GET",
+  inventoryReader: InventoryReader = reader,
+  metricsReader: PerformanceReader = performanceReader,
+  incidents: IncidentOperations = incidentOperations,
+  body?: string
+): Promise<Response> {
+  return handleInventoryRequest(new Request(`http://inventory-api.local${path}`, {
+    method,
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body
+  }), inventoryReader, metricsReader, topologyReader, incidents);
 }
 
 describe("read-only inventory API", () => {
@@ -89,6 +135,116 @@ describe("read-only inventory API", () => {
     expect((await request("/api/v1/topology?query=pods")).status).toBe(400);
   });
 
+  it("serves bounded incident lists and detail through explicit filters", async () => {
+    const response = await request("/api/v1/incidents?environment=demo&status=active");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ apiVersion: 1, environment: "demo", statusFilter: "active" });
+
+    const detail = await request("/api/v1/incidents/INC-000001");
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ incident: { id: "INC-000001" }, audit: [] });
+
+    expect((await request("/api/v1/incidents?environment=production")).status).toBe(400);
+    expect((await request("/api/v1/incidents?environment=shared")).status).toBe(400);
+    expect((await request("/api/v1/incidents?status=deleted")).status).toBe(400);
+    expect((await request("/api/v1/incidents?query=arbitrary")).status).toBe(400);
+  });
+
+  it("allows strict JSON writes only on the incident command surface", async () => {
+    const declaration = await request("/api/v1/incidents", "POST", reader, performanceReader, incidentOperations, JSON.stringify({
+      serviceId: "cpq-demo", title: "Persistent declaration", severity: "P2", reason: "Operator confirmed impact"
+    }));
+    expect(declaration.status).toBe(201);
+    expect(await declaration.json()).toMatchObject({ incident: { title: "Persistent declaration", severity: "P2" } });
+
+    const transition = await request("/api/v1/incidents/INC-000001/transitions", "POST", reader, performanceReader, incidentOperations, JSON.stringify({
+      action: "acknowledge", expectedVersion: 1, reason: "Taking command"
+    }));
+    expect(transition.status).toBe(200);
+    expect(await transition.json()).toMatchObject({ incident: { version: 2 } });
+
+    expect((await request("/api/v1/inventory", "POST", reader, performanceReader, incidentOperations, "{}")).status).toBe(405);
+    expect((await request("/api/v1/incidents", "DELETE")).status).toBe(405);
+    expect((await request("/api/v1/incidents", "POST", reader, performanceReader, incidentOperations, "not-json")).status).toBe(400);
+    expect((await request("/api/v1/incidents", "POST", reader, performanceReader, incidentOperations, JSON.stringify({
+      serviceId: "cpq-demo", title: "Unexpected", severity: "P2", reason: "Rejected field", actor: "browser-chosen"
+    }))).status).toBe(400);
+    expect((await request("/api/v1/incidents", "POST", reader, performanceReader, incidentOperations, JSON.stringify({ value: "x".repeat(17_000) }))).status).toBe(413);
+  });
+
+  it("redacts unexpected incident failures while preserving explicit request errors", async () => {
+    const failing: IncidentOperations = {
+      ...incidentOperations,
+      list(): Promise<IncidentListResponse> { return Promise.reject(new Error("token=must-not-leak")); }
+    };
+    const response = await request("/api/v1/incidents", "GET", reader, performanceReader, failing);
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe(JSON.stringify({ error: { code: "incidents_unavailable", message: "Incident operations could not be completed." } }));
+
+    const rejected: IncidentOperations = {
+      ...incidentOperations,
+      getDetail(): Promise<IncidentDetailResponse> {
+        return Promise.reject(new IncidentRequestError("incident_not_found", 404, "The requested incident does not exist."));
+      }
+    };
+    const missing = await request("/api/v1/incidents/INC-000099", "GET", reader, performanceReader, rejected);
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: { code: "incident_not_found", message: "The requested incident does not exist." } });
+  });
+
+  it("rejects malformed incident commands, ambiguous routes, and browser-selected fields", async () => {
+    const noContentType = await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/incidents", {
+      method: "POST",
+      body: JSON.stringify({ serviceId: "cpq-demo", title: "Missing media type", severity: "P2", reason: "Must be rejected" })
+    }), reader, performanceReader, topologyReader, incidentOperations);
+    expect(noContentType.status).toBe(400);
+    const misleadingContentType = await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/incidents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json-patch+json" },
+      body: JSON.stringify({ serviceId: "cpq-demo", title: "Wrong media type", severity: "P2", reason: "Must be rejected" })
+    }), reader, performanceReader, topologyReader, incidentOperations);
+    expect(misleadingContentType.status).toBe(400);
+
+    for (const body of [
+      "[]",
+      JSON.stringify({ serviceId: "cpq-demo", title: "Missing reason", severity: "P2" })
+    ]) {
+      expect((await request("/api/v1/incidents", "POST", reader, performanceReader, incidentOperations, body)).status).toBe(400);
+    }
+
+    expect((await request("/api/v1/incidents?environment=demo", "POST", reader, performanceReader, incidentOperations, JSON.stringify({
+      serviceId: "cpq-demo", title: "Query ambiguity", severity: "P2", reason: "Must be rejected"
+    }))).status).toBe(400);
+    expect((await request("/api/v1/incidents/INC-000001?status=active")).status).toBe(400);
+    expect((await request("/api/v1/incidents/INC-000001/transitions", "GET")).status).toBe(405);
+    expect((await request("/api/v1/incidents/INC-000001", "POST", reader, performanceReader, incidentOperations, "{}")).status).toBe(405);
+
+    expect((await request("/api/v1/incidents/INC-000001/transitions", "POST", reader, performanceReader, incidentOperations, JSON.stringify({
+      action: "silence", expectedVersion: 1, reason: "Invalid duration", durationMinutes: 12.5
+    }))).status).toBe(400);
+    expect((await request("/api/v1/incidents/INC-000001/transitions", "POST", reader, performanceReader, incidentOperations, JSON.stringify({
+      action: "acknowledge", expectedVersion: Number.MAX_SAFE_INTEGER + 1, reason: "Unsafe version"
+    }))).status).toBe(400);
+    const silence = await request("/api/v1/incidents/INC-000001/transitions", "POST", reader, performanceReader, incidentOperations, JSON.stringify({
+      action: "silence", expectedVersion: 1, reason: "Bounded maintenance", durationMinutes: 15
+    }));
+    expect(silence.status).toBe(200);
+  });
+
+  it("reports optional API capabilities as unavailable without affecting health", async () => {
+    const base = new Request("http://inventory-api.local/api/v1/incidents");
+    expect((await handleInventoryRequest(base, reader, performanceReader, topologyReader)).status).toBe(503);
+    expect((await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/performance"), reader)).status).toBe(503);
+    expect((await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/topology"), reader, performanceReader)).status).toBe(503);
+
+    const unavailableTopology: TopologyReader = {
+      async getTopology(): Promise<TopologySnapshot> { throw new Error("token=must-not-leak"); }
+    };
+    const topology = await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/topology"), reader, performanceReader, unavailableTopology);
+    expect(topology.status).toBe(500);
+    expect(await topology.text()).not.toContain("must-not-leak");
+  });
+
   it("does not leak unexpected Prometheus errors", async () => {
     const failingPerformanceReader: PerformanceReader = {
       async getPerformance(): Promise<PerformanceSnapshot> {
@@ -133,9 +289,34 @@ describe("read-only inventory API", () => {
     expect(body).not.toContain("super-secret");
   });
 
-  it("constructs the Node server adapter and rejects unknown routes", async () => {
-    const server = createInventoryHttpServer(reader, performanceReader, topologyReader);
+  it("runs the Node server adapter and enforces the wire body limit", async () => {
+    const server = createInventoryHttpServer(reader, performanceReader, topologyReader, incidentOperations);
     expect(server.listening).toBe(false);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("Test server did not expose a TCP address");
+      const base = `http://127.0.0.1:${address.port}`;
+      const declaration = await fetch(`${base}/api/v1/incidents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serviceId: "cpq-demo", title: "Wire declaration", severity: "P2", reason: "Adapter test" })
+      });
+      expect(declaration.status).toBe(201);
+
+      const oversized = await fetch(`${base}/api/v1/incidents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: "x".repeat(17_000) })
+      });
+      expect(oversized.status).toBe(413);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+    }
+
     const missing = await request("/api/v2/inventory");
     expect(missing.status).toBe(404);
   });
@@ -143,7 +324,8 @@ describe("read-only inventory API", () => {
   it("normalizes forbidden Node HTTP methods to a safe 405 request", () => {
     expect(safeNodeRequestMethod("GET")).toBe("GET");
     expect(safeNodeRequestMethod("HEAD")).toBe("HEAD");
-    expect(safeNodeRequestMethod("TRACE")).toBe("POST");
+    expect(safeNodeRequestMethod("POST")).toBe("POST");
+    expect(safeNodeRequestMethod("TRACE")).toBe("DELETE");
     expect(safeNodeRequestMethod(undefined)).toBe("GET");
   });
 });

@@ -24,7 +24,7 @@ import type { PerformanceMetric, PerformanceMetricId } from "../../../shared/per
 import type { TopologyResource, TopologyResourceKind, TopologySnapshot } from "../../../shared/topology";
 import { StateGallery } from "../components/StateGallery";
 import { StatusBadge } from "../components/StatusBadge";
-import type { IncidentSummary, MonitoringProvider, OverviewSnapshot, PerformanceSnapshot, TimeRange } from "../data/types";
+import type { IncidentDetailResponse, IncidentListResponse, IncidentStatusFilter, IncidentSummary, IncidentTransitionCommand, MonitoringProvider, OverviewSnapshot, PerformanceSnapshot, TimeRange } from "../data/types";
 
 interface SnapshotPageProps {
   readonly snapshot: OverviewSnapshot;
@@ -525,80 +525,183 @@ export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: P
   );
 }
 
-export function IncidentsPage({ snapshot }: SnapshotPageProps): React.JSX.Element {
-  const [incidents, setIncidents] = useState<readonly IncidentSummary[]>(snapshot.incidents);
-  const [selectedId, setSelectedId] = useState<string>(snapshot.incidents[0]?.id ?? "");
+interface IncidentsPageProps extends SnapshotPageProps {
+  readonly provider: MonitoringProvider;
+  readonly environment: OverviewSnapshot["environment"];
+  readonly refreshKey: number;
+  readonly onMutated: () => void;
+}
+
+type OperatorAction = IncidentTransitionCommand["action"];
+
+const actionLabels: Readonly<Record<OperatorAction, { readonly title: string; readonly confirm: string }>> = {
+  acknowledge: { title: "Acknowledge incident", confirm: "Confirm acknowledge" },
+  declare: { title: "Declare alert as incident", confirm: "Confirm declaration" },
+  silence: { title: "Silence incident", confirm: "Confirm silence" },
+  resolve: { title: "Resolve incident", confirm: "Confirm resolution" }
+};
+
+export function IncidentsPage({ snapshot, provider, environment, refreshKey, onMutated }: IncidentsPageProps): React.JSX.Element {
+  const [statusFilter, setStatusFilter] = useState<IncidentStatusFilter>("active");
+  const [severityFilter, setSeverityFilter] = useState<"all" | IncidentSummary["severity"]>("all");
+  const [query, setQuery] = useState("");
+  const [list, setList] = useState<IncidentListResponse | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState("");
+  const [detail, setDetail] = useState<IncidentDetailResponse | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [runbookOpen, setRunbookOpen] = useState(false);
   const [declareOpen, setDeclareOpen] = useState(false);
+  const [action, setAction] = useState<OperatorAction | null>(null);
+  const [actionReason, setActionReason] = useState("");
+  const [silenceDuration, setSilenceDuration] = useState<15 | 60 | 360 | 1440>(60);
+  const [commandError, setCommandError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [title, setTitle] = useState("");
-  const [service, setService] = useState("");
+  const [serviceId, setServiceId] = useState(snapshot.services[0]?.id ?? "");
   const [severity, setSeverity] = useState<IncidentSummary["severity"]>("P2");
-  const selected = incidents.find((incident) => incident.id === selectedId) ?? incidents[0];
+  const [declarationReason, setDeclarationReason] = useState("");
 
-  function acknowledgeSelected(): void {
-    if (selected === undefined) return;
-    setIncidents((current) => current.map((incident) => incident.id === selected.id
-      ? { ...incident, acknowledged: true, assignee: "J. Haynes" }
-      : incident));
+  useEffect(() => {
+    let active = true;
+    if (provider.getIncidents === undefined) {
+      setList(null);
+      setListError("Persistent incident operations are not configured.");
+      return () => { active = false; };
+    }
+    setListError(null);
+    void provider.getIncidents(environment, statusFilter).then((response) => {
+      if (!active) return;
+      setList(response);
+      setSelectedId((current) => response.incidents.some((incident) => incident.id === current) ? current : response.incidents[0]?.id ?? "");
+    }).catch((cause: unknown) => {
+      if (active) { setList(null); setListError(cause instanceof Error ? cause.message : "Unknown incident list error"); }
+    });
+    return () => { active = false; };
+  }, [environment, provider, refreshKey, reloadKey, statusFilter]);
+
+  useEffect(() => {
+    let active = true;
+    if (selectedId === "") { setDetail(null); setDetailError(null); return () => { active = false; }; }
+    if (provider.getIncident === undefined) { setDetail(null); setDetailError("Incident detail is not configured."); return () => { active = false; }; }
+    setDetailError(null);
+    void provider.getIncident(selectedId).then((response) => { if (active) setDetail(response); }).catch((cause: unknown) => {
+      if (active) { setDetail(null); setDetailError(cause instanceof Error ? cause.message : "Unknown incident detail error"); }
+    });
+    return () => { active = false; };
+  }, [provider, selectedId]);
+
+  const visible = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return (list?.incidents ?? []).filter((incident) => (severityFilter === "all" || incident.severity === severityFilter)
+      && (normalizedQuery === "" || `${incident.id} ${incident.title} ${incident.serviceName} ${incident.owner}`.toLowerCase().includes(normalizedQuery)));
+  }, [list, query, severityFilter]);
+
+  function completeMutation(response: IncidentDetailResponse): void {
+    setDetail(response);
+    setSelectedId(response.incident.id);
+    setReloadKey((value) => value + 1);
+    onMutated();
   }
 
-  function declareIncident(event: React.SyntheticEvent<HTMLFormElement>): void {
+  async function submitTransition(event: React.SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const normalizedTitle = title.trim();
-    const normalizedService = service.trim();
-    if (normalizedTitle === "" || normalizedService === "") return;
-    const incident: IncidentSummary = {
-      id: `INC-SESSION-${String(incidents.length + 1).padStart(3, "0")}`,
-      title: normalizedTitle,
-      service: normalizedService,
-      severity,
-      status: "investigating",
-      startedAt: "Just now",
-      assignee: "J. Haynes",
-      acknowledged: false,
-      description: `Operator-declared investigation affecting ${normalizedService}.`,
-      owner: "Development Lab",
-      errorBudget: "Not assessed",
-      runbookSteps: ["Confirm the alert and affected service.", "Inspect current health, performance, and infrastructure evidence.", "Record findings before changing incident status."]
-    };
-    setIncidents((current) => [...current, incident]);
-    setSelectedId(incident.id);
-    setTitle("");
-    setService("");
-    setSeverity("P2");
-    setDeclareOpen(false);
+    if (action === null || detail === null || provider.transitionIncident === undefined) return;
+    setSubmitting(true);
+    setCommandError(null);
+    try {
+      const response = await provider.transitionIncident(detail.incident.id, {
+        action,
+        expectedVersion: detail.incident.version,
+        reason: actionReason,
+        ...(action === "silence" ? { durationMinutes: silenceDuration } : {})
+      });
+      completeMutation(response);
+      setAction(null);
+      setActionReason("");
+    } catch (cause: unknown) {
+      setCommandError(cause instanceof Error ? cause.message : "Incident transition failed");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
+  async function submitDeclaration(event: React.SyntheticEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (provider.declareIncident === undefined) return;
+    setSubmitting(true);
+    setCommandError(null);
+    try {
+      const response = await provider.declareIncident({ serviceId, title, severity, reason: declarationReason });
+      completeMutation(response);
+      setDeclareOpen(false);
+      setTitle("");
+      setSeverity("P2");
+      setDeclarationReason("");
+    } catch (cause: unknown) {
+      setCommandError(cause instanceof Error ? cause.message : "Incident declaration failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const selected = detail?.incident ?? null;
   return (
     <>
-      <PageHeader eyebrow="Operations / Incidents" title="Incidents" description="Session-only incident workspace backed by the current monitoring snapshot; changes reset on reload." action={<button className="primary-button" type="button" onClick={() => setDeclareOpen(true)}>Declare incident</button>} />
+      <PageHeader eyebrow="Operations / Incidents" title="Incidents" description="Persistent alert-driven operations with bounded state transitions, silences, runbooks, and audit history." action={<button className="primary-button" type="button" onClick={() => { setCommandError(null); setDeclareOpen(true); }}>Declare incident</button>} />
+      <section className="incident-source-strip" aria-label="Incident operation status">
+        {listError !== null ? <p role="alert">Incident operations unavailable: {listError}</p> : list === null ? <p role="status">Loading persistent incidents…</p> : <>
+          <p className={list.mode === "partial" ? "source-partial" : "source-available"}>{list.alertSource.availability === "available" ? "Live alert evaluation available" : list.alertSource.message}</p>
+          <p>{list.notification.message}</p>
+          <p>Actor: {list.operator.id} · configured lab identity</p>
+          {list.truncated && <p className="source-partial">Incident results reached the 100-record server cap; narrow the filters.</p>}
+        </>}
+      </section>
+      <section className="incident-filters" aria-label="Incident filters">
+        <label><span>Incident status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as IncidentStatusFilter)}><option value="active">Active</option><option value="resolved">Resolved</option><option value="all">All</option></select></label>
+        <label><span>Severity filter</span><select value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value as typeof severityFilter)}><option value="all">All severities</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option></select></label>
+        <label className="incident-search"><span>Search incidents</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+      </section>
       <section className="incident-command-grid">
         <article className="panel incident-queue">
-          <PanelHeader title="Active queue" meta={`${incidents.length} incidents`} />
-          {incidents.map((incident) => (
-            <button className={`incident-command-row ${incident.id === selected?.id ? "selected" : ""}`} type="button" key={incident.id} aria-pressed={incident.id === selected?.id} onClick={() => setSelectedId(incident.id)}>
+          <PanelHeader title="Incident queue" meta={`${visible.length} ${visible.length === 1 ? "incident" : "incidents"}`} />
+          {visible.map((incident) => (
+            <button className={`incident-command-row ${incident.id === selectedId ? "selected" : ""}`} type="button" key={incident.id} aria-pressed={incident.id === selectedId} onClick={() => setSelectedId(incident.id)}>
               <span className={`severity severity-${incident.severity.toLowerCase()}`}>{incident.severity}</span>
-              <span><strong>{incident.title}</strong><small>{incident.id} · {incident.service} · {incident.startedAt}</small></span>
+              <span><strong>{incident.title}</strong><small>{incident.id} · {incident.serviceName} · {formattedTimestamp(incident.startedAt)}</small></span>
               <span className="assignee">{incident.assignee}</span>
             </button>
           ))}
+          {list !== null && visible.length === 0 && <p className="empty-panel-copy">No incidents match the selected scope and filters.</p>}
         </article>
-        {selected === undefined ? <article className="panel incident-detail"><p className="empty-panel-copy">No incidents are active in this scope.</p></article> : <article className="panel incident-detail">
-          <span className="eyebrow">{selected.id} · {selected.status}</span>
+        {detailError !== null ? <article className="panel incident-detail"><p role="alert">Incident detail unavailable: {detailError}</p></article> : selected === null ? <article className="panel incident-detail"><p className="empty-panel-copy">Select an incident to inspect its evidence and history.</p></article> : <article className="panel incident-detail">
+          <span className="eyebrow">{selected.id} · <span className="incident-state">{selected.status}</span> · version {selected.version}</span>
           <h2>{selected.title}</h2>
           <p>{selected.description}</p>
           <div className="incident-detail-grid">
             <div><span>Owner</span><strong>{selected.owner}</strong></div>
             <div><span>Commander</span><strong>{selected.assignee}</strong></div>
-            <div><span>Started</span><strong>{selected.startedAt}</strong></div>
-            <div><span>Error budget</span><strong>{selected.errorBudget}</strong></div>
+            <div><span>Started</span><strong>{formattedTimestamp(selected.startedAt)}</strong></div>
+            <div><span>Alert condition</span><strong>{selected.alertActive ? "Active" : "Recovered"}</strong></div>
           </div>
-          {selected.acknowledged && <p className="incident-confirmation" role="status">Acknowledged by J. Haynes</p>}
-          <div className="incident-actions"><button className="primary-button" type="button" disabled={selected.acknowledged} onClick={acknowledgeSelected}>{selected.acknowledged ? "Acknowledged" : "Acknowledge"}</button><button className="secondary-button" type="button" onClick={() => setRunbookOpen(true)}>Open runbook</button></div>
+          {selected.acknowledgedBy !== null && <p className="incident-confirmation" role="status">Acknowledged by {selected.acknowledgedBy}</p>}
+          {selected.declaredBy !== null && <p className="incident-confirmation" role="status">Declared by {selected.declaredBy}</p>}
+          {selected.silence?.active === true && <p className="incident-silence" role="status">Silenced until {formattedTimestamp(selected.silence.expiresAt)} · {selected.silence.reason}</p>}
+          <div className="incident-actions">
+            <button className="primary-button" type="button" disabled={selected.status === "resolved" || selected.acknowledgedAt !== null} onClick={() => { setCommandError(null); setActionReason(""); setAction("acknowledge"); }}>{selected.acknowledgedAt === null ? "Acknowledge" : "Acknowledged"}</button>
+            <button className="secondary-button" type="button" disabled={selected.status === "resolved" || selected.declaredAt !== null} onClick={() => { setCommandError(null); setActionReason(""); setAction("declare"); }}>Declare alert as incident</button>
+            <button className="secondary-button" type="button" disabled={selected.status === "resolved" || selected.silence?.active === true} onClick={() => { setCommandError(null); setActionReason(""); setAction("silence"); }}>Silence</button>
+            <button className="secondary-button" type="button" disabled={selected.status === "resolved"} onClick={() => { setCommandError(null); setActionReason(""); setAction("resolve"); }}>Resolve</button>
+            <button className="secondary-button" type="button" onClick={() => setRunbookOpen(true)}>Open runbook</button>
+          </div>
+          <section className="incident-evidence"><h3>Source evidence</h3>{selected.evidence.map((evidence) => <div key={evidence.source}><strong>{evidence.source}</strong><span>{evidence.state} · {evidence.occurrences} observations</span><p>{evidence.message}</p></div>)}</section>
+          <section className="incident-timeline"><h3>Audit history</h3><ol>{detail?.audit.map((event) => <li key={event.id}><strong>{event.action.replaceAll("_", " ")}</strong><span>{event.actor} · {formattedTimestamp(event.createdAt)} · v{event.version}</span><p>{event.reason}</p></li>)}</ol></section>
         </article>}
       </section>
-      {declareOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDeclareOpen(false)}><form className="operator-dialog" role="dialog" aria-modal="true" aria-label="Declare incident" onSubmit={declareIncident} onMouseDown={(event) => event.stopPropagation()}><h2>Declare incident</h2><p>This incident exists for this browser session only.</p><label><span>Incident title</span><input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label><span>Affected service</span><input required value={service} onChange={(event) => setService(event.target.value)} /></label><label><span>Severity</span><select value={severity} onChange={(event) => setSeverity(event.target.value as IncidentSummary["severity"])}><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option></select></label><div className="incident-actions"><button className="primary-button" type="submit">Create incident</button><button className="secondary-button" type="button" onClick={() => setDeclareOpen(false)}>Cancel</button></div></form></div>}
-      {runbookOpen && selected !== undefined && <div className="modal-backdrop" role="presentation" onMouseDown={() => setRunbookOpen(false)}><section className="operator-dialog" role="dialog" aria-modal="true" aria-label={`${selected.service} runbook`} onMouseDown={(event) => event.stopPropagation()}><span className="eyebrow">Runbook / {selected.service}</span><h2>{selected.title}</h2><ol>{selected.runbookSteps.map((step) => <li key={step}>{step}</li>)}</ol><button className="secondary-button" type="button" onClick={() => setRunbookOpen(false)}>Close runbook</button></section></div>}
+      {declareOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDeclareOpen(false)}><form className="operator-dialog" role="dialog" aria-modal="true" aria-label="Declare incident" onSubmit={(event) => { void submitDeclaration(event); }} onMouseDown={(event) => event.stopPropagation()}><h2>Declare incident</h2><p>The incident, declaration reason, and audit entry are persisted by the server.</p><label><span>Incident title</span><input required minLength={3} maxLength={160} value={title} onChange={(event) => setTitle(event.target.value)} /></label><label><span>Affected service</span><select required value={serviceId} onChange={(event) => setServiceId(event.target.value)}>{snapshot.services.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}</select></label><label><span>Severity</span><select value={severity} onChange={(event) => setSeverity(event.target.value as IncidentSummary["severity"])}><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option></select></label><label><span>Declaration reason</span><textarea required minLength={3} maxLength={500} value={declarationReason} onChange={(event) => setDeclarationReason(event.target.value)} /></label>{commandError !== null && <p role="alert">{commandError}</p>}<div className="incident-actions"><button className="primary-button" type="submit" disabled={submitting}>Create incident</button><button className="secondary-button" type="button" onClick={() => setDeclareOpen(false)}>Cancel</button></div></form></div>}
+      {action !== null && selected !== null && <div className="modal-backdrop" role="presentation" onMouseDown={() => setAction(null)}><form className="operator-dialog" role="dialog" aria-modal="true" aria-label={actionLabels[action].title} onSubmit={(event) => { void submitTransition(event); }} onMouseDown={(event) => event.stopPropagation()}><h2>{actionLabels[action].title}</h2><p>This transition will be attributed to {list?.operator.id ?? "the configured lab operator"} and appended to immutable incident history.</p><label><span>Reason</span><textarea required minLength={3} maxLength={500} value={actionReason} onChange={(event) => setActionReason(event.target.value)} /></label>{action === "silence" && <label><span>Silence duration</span><select value={silenceDuration} onChange={(event) => setSilenceDuration(Number(event.target.value) as typeof silenceDuration)}><option value={15}>15 minutes</option><option value={60}>1 hour</option><option value={360}>6 hours</option><option value={1440}>24 hours</option></select></label>}{commandError !== null && <p role="alert">{commandError}</p>}<div className="incident-actions"><button className="primary-button" type="submit" disabled={submitting}>{actionLabels[action].confirm}</button><button className="secondary-button" type="button" onClick={() => setAction(null)}>Cancel</button></div></form></div>}
+      {runbookOpen && selected !== null && <div className="modal-backdrop" role="presentation" onMouseDown={() => setRunbookOpen(false)}><section className="operator-dialog" role="dialog" aria-modal="true" aria-label={`${selected.serviceName} runbook`} onMouseDown={(event) => event.stopPropagation()}><span className="eyebrow">Runbook / {selected.serviceName}</span><h2>{selected.runbook.title}</h2><ol>{selected.runbook.steps.map((step) => <li key={step}>{step}</li>)}</ol><button className="secondary-button" type="button" onClick={() => setRunbookOpen(false)}>Close runbook</button></section></div>}
     </>
   );
 }
