@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { InventorySnapshot } from "../../shared/inventory";
 import type { PerformanceSnapshot } from "../../shared/performance";
+import type { TopologySnapshot } from "../../shared/topology";
 import { createInventoryHttpServer, handleInventoryRequest, safeNodeRequestMethod, type InventoryReader, type PerformanceReader } from "../src/api";
 import { InventoryAggregator } from "../src/inventory";
 import { PerformanceRequestError } from "../src/prometheus";
+import type { TopologyReader } from "../src/topology";
 import { catalogFixture } from "./fixtures";
 
 const reader = new InventoryAggregator(catalogFixture, [], () => new Date("2026-08-13T01:00:00Z"));
@@ -26,9 +28,14 @@ const performanceReader: PerformanceReader = {
     return { ...performanceSnapshot, environment: environment as "demo", serviceId, window: { ...performanceSnapshot.window, range: range as "1h" } };
   }
 };
+const topologyReader: TopologyReader = {
+  async getTopology(environment): Promise<TopologySnapshot> {
+    return { apiVersion: 1, mode: "live", assembledAt: "2026-08-14T10:00:00Z", environment: environment as "demo", namespaces: ["default"], truncated: false, resources: [], edges: [], source: { name: "kubernetes", availability: "available", message: null } };
+  }
+};
 
 function request(path: string, method = "GET", inventoryReader: InventoryReader = reader, metricsReader: PerformanceReader = performanceReader): Promise<Response> {
-  return handleInventoryRequest(new Request(`http://inventory-api.local${path}`, { method }), inventoryReader, metricsReader);
+  return handleInventoryRequest(new Request(`http://inventory-api.local${path}`, { method }), inventoryReader, metricsReader, topologyReader);
 }
 
 describe("read-only inventory API", () => {
@@ -72,6 +79,14 @@ describe("read-only inventory API", () => {
       const invalid = await request(path);
       expect(invalid.status).toBe(400);
     }
+  });
+
+  it("serves topology through an allow-listed environment filter", async () => {
+    const response = await request("/api/v1/topology?environment=demo");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ apiVersion: 1, environment: "demo", namespaces: ["default"] });
+    expect((await request("/api/v1/topology?environment=production")).status).toBe(400);
+    expect((await request("/api/v1/topology?query=pods")).status).toBe(400);
   });
 
   it("does not leak unexpected Prometheus errors", async () => {
@@ -119,7 +134,7 @@ describe("read-only inventory API", () => {
   });
 
   it("constructs the Node server adapter and rejects unknown routes", async () => {
-    const server = createInventoryHttpServer(reader, performanceReader);
+    const server = createInventoryHttpServer(reader, performanceReader, topologyReader);
     expect(server.listening).toBe(false);
     const missing = await request("/api/v2/inventory");
     expect(missing.status).toBe(404);

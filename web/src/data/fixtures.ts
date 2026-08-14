@@ -33,7 +33,8 @@ export const serviceFixtures: readonly ServiceInventory[] = [
   fixtureService("cpq-test", "CPQ Test", "application", "test", "degraded", "https://test.example.test/ready", "v4.13.0-rc2"),
   fixtureService("oauth", "OAuth / Keycloak", "identity", "shared", "failing", "https://oauth.example.test/", "26.3.2"),
   fixtureService("mailpit", "Mailpit", "mail", "shared", "healthy", "https://mail.example.test/", "v1.27.4"),
-  fixtureService("erpnet", "ERPNext", "erp", "demo", "healthy", "https://erp.example.test/", "v15.72.3")
+  fixtureService("erpnet", "ERPNext", "erp", "demo", "healthy", "https://erp.example.test/", "v15.72.3"),
+  fixtureService("portfolio", "Portfolio", "application", "portfolio", "healthy", "https://jefferyhaynes.net/", "v1")
 ];
 
 export const incidentFixtures: readonly IncidentSummary[] = [
@@ -44,7 +45,12 @@ export const incidentFixtures: readonly IncidentSummary[] = [
     severity: "P1",
     status: "investigating",
     startedAt: "32 min ago",
-    assignee: "J. Haynes"
+    assignee: "J. Haynes",
+    acknowledged: false,
+    description: "Authentication requests are exceeding the 400 ms p95 threshold. CPQ Demo and CPQ Test are in the current blast radius.",
+    owner: "Identity Services",
+    errorBudget: "3.7× burn",
+    runbookSteps: ["Confirm internal and public-path discovery probes.", "Inspect Keycloak latency and container saturation.", "Validate CPQ token exchange recovery before resolving."]
   },
   {
     id: "INC-2047",
@@ -53,7 +59,12 @@ export const incidentFixtures: readonly IncidentSummary[] = [
     severity: "P2",
     status: "monitoring",
     startedAt: "1 hr 18 min ago",
-    assignee: "Platform On-call"
+    assignee: "Platform On-call",
+    acknowledged: false,
+    description: "CPQ Test readiness remained healthy during intermittent monitoring gaps; live Kubernetes workload evidence is now restored.",
+    owner: "Platform Engineering",
+    errorBudget: "No SLO burn",
+    runbookSteps: ["Confirm the CPQ Test readiness endpoint returns HTTP 200.", "Inspect the cpq-test application deployment and recent events.", "Confirm current Kubernetes inventory evidence remains available."]
   }
 ];
 

@@ -25,6 +25,7 @@ class CatalogContractTests(unittest.TestCase):
             {service.service_id for service in catalog.services},
             {"cpq-demo", "cpq-test", "oauth", "mailpit", "erpnet", "portfolio"},
         )
+        self.assertEqual(catalog.services[-1].environment.value, "portfolio")
         demo = next(service for service in catalog.services if service.service_id == "cpq-demo")
         self.assertEqual(len(demo.workloads), 1)
         self.assertEqual(demo.workloads[0].kind, WorkloadKind.DEPLOYMENT)

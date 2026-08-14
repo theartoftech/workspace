@@ -180,7 +180,7 @@
       "id": "portfolio",
       "displayName": "Portfolio",
       "kind": "application",
-      "environment": "demo",
+      "environment": "portfolio",
       "owner": "Development Lab",
       "criticality": "high",
       "workloads": [

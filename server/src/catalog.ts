@@ -129,7 +129,7 @@ function parseService(value: unknown, index: number): CatalogServiceDefinition {
     id: text(raw.id, `${context}.id`),
     displayName: text(raw.displayName, `${context}.displayName`),
     kind: oneOf(raw.kind, ["application", "identity", "mail", "erp"] as const, `${context}.kind`),
-    environment: oneOf(raw.environment, ["demo", "test", "shared"] as const, `${context}.environment`),
+    environment: oneOf(raw.environment, ["demo", "test", "portfolio", "shared"] as const, `${context}.environment`),
     owner: text(raw.owner, `${context}.owner`),
     criticality: oneOf(raw.criticality, ["critical", "high", "medium"] as const, `${context}.criticality`),
     probes,

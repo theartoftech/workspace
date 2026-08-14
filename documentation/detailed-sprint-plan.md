@@ -32,7 +32,7 @@
 | 1.1 | Portal packaging and lab deployment | Deployed and user-verified | Build and run the hardened fixture portal beside the monitoring stack, then review the reversible Cloudflare cutover |
 | 2 | Live deployment inventory | Deployed and user-verified | See current status for CPQ, OAuth, Mailpit, and ERPNet from one screen |
 | 3 | Traffic and performance | Implemented locally; not deployed | Inspect real request rate, errors, saturation, and latency graphs |
-| 4 | Infrastructure topology | Planned | Drill from an environment into workloads, nodes, and dependencies |
+| 4 | Infrastructure topology | Implemented locally | Drill from an environment into workloads, nodes, and dependencies |
 | 5 | Alerts and incident operations | Planned | Triage, acknowledge, silence, and annotate a simulated incident |
 | 6 | Logs and event correlation | Planned | Move from a failed service to relevant logs and Kubernetes events |
 | 7 | Enterprise identity and access | Planned | Sign in through OIDC and verify role-scoped actions and audit records |

@@ -65,28 +65,33 @@ MONITORING_ENV_FILE=/home/jhaynes/workspace-monitor/runtime/lab-docker/.env
 
 Set `MONITORING_UID` and `MONITORING_GID` from `id -u` and `id -g`. Create the Grafana password file with a password-manager-generated value, owned by that UID/GID, and mode `0640`. Grafana remains UID 472 and receives the monitoring host group as a supplementary group solely to read this file. Sprint 0 does not require SMTP or webhook credentials; notification delivery is deferred until the integration design is reviewed.
 
-### Optional live Kubernetes evidence
+### Required live Kubernetes evidence
 
-Gatus inventory works without Kubernetes credentials. In that case, the portal deliberately reports `partial` mode and mapped workloads remain unknown. To enable Kubernetes evidence, first review `deploy/kubernetes/inventory-reader-rbac.yaml`. It grants only `get` on Deployments and Pods and binds that role only in the catalog namespaces `default`, `cpq-test`, and `public-site`.
+The portal can still explain partial data without Kubernetes credentials, but Sprint 4 deployment preflight and verification now require live Kubernetes evidence. First review `deploy/kubernetes/inventory-reader-rbac.yaml`. It grants `get`/`list` only for topology resources inside the catalog namespaces `default`, `cpq-test`, and `public-site`; namespace reads are name-restricted, and cluster scope is limited to read-only node inventory. Mutation and watch permissions are deliberately absent.
 
-Applying RBAC is a separate, explicit cluster mutation and is not performed by the deployment script:
-
-```sh
-cd "$HOME/workspace-monitor/release"
-kubectl apply -f deploy/kubernetes/inventory-reader-rbac.yaml
-kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory get deployment/application -n default
-kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory list deployments -n default
-```
-
-The first authorization check must return `yes`; the second must return `no`. Issue a bounded token and install it so only the inventory container UID can read it:
+Applying RBAC is a separate, explicit cluster mutation and is not performed by the deployment script. Apply the reviewed manifest from the workspace before deploying the monitoring release, because the deployment verifier now requires live topology:
 
 ```sh
-kubectl --namespace monitoring create token workspace-monitor-inventory --duration=168h | \
-  sudo install -o 10001 -g 10001 -m 0400 /dev/stdin \
-  /home/jhaynes/workspace-monitor/runtime/lab-docker/data/runtime-secrets/kubernetes_inventory_token
+scp deploy/kubernetes/inventory-reader-rbac.yaml \
+  jhaynes@192.168.86.246:/tmp/workspace-monitor-rbac.yaml
+ssh -t jhaynes@192.168.86.246 \
+  'sudo k3s kubectl apply -f /tmp/workspace-monitor-rbac.yaml'
+ssh jhaynes@192.168.86.246 \
+  'rm -f /tmp/workspace-monitor-rbac.yaml'
+ssh -t jhaynes@192.168.86.246 \
+  'sudo k3s kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory list deployments -n default'
+ssh -t jhaynes@192.168.86.246 \
+  'sudo k3s kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory list nodes'
 ```
 
-The Compose profile mounts the k3s server CA from `/var/lib/rancher/k3s/server/tls/server-ca.crt`; override `KUBERNETES_HOST_CA_FILE` only when the reviewed server path differs. Renew the token before expiry and restart only `inventory-api` so it rereads the file. An expired or rejected token becomes an explicit unavailable source and cannot turn workload health green.
+Both authorization checks must return `yes`. Mutation checks such as `create`, `update`, `patch`, and `delete` must remain `no`. Issue a bounded token and install it so only the inventory container UID can read it:
+
+```sh
+ssh -t jhaynes@192.168.86.246 \
+  "sudo sh -c 'mkdir -p /home/jhaynes/workspace-monitor/runtime/lab-docker/data/runtime-secrets && k3s kubectl --namespace monitoring create token workspace-monitor-inventory --duration=168h | install -o 10001 -g 10001 -m 0400 /dev/stdin /home/jhaynes/workspace-monitor/runtime/lab-docker/data/runtime-secrets/kubernetes_inventory_token'"
+```
+
+The Compose profile connects to `https://192.168.86.246:6443`, an address present in the lab k3s API certificate, and mounts its server CA from `/var/lib/rancher/k3s/server/tls/server-ca.crt`. If the host address changes, set `KUBERNETES_API_URL` to a DNS name or IP present in that certificate and override `KUBERNETES_HOST_CA_FILE` only when the reviewed server path differs. Do not disable TLS verification or use `host.docker.internal`, which is not covered by the lab certificate. Renew the token before expiry and restart only `inventory-api` so it rereads the file. An expired or rejected token becomes an explicit unavailable source and cannot turn workload health green.
 
 ### Portfolio request metrics prerequisite
 

@@ -61,7 +61,7 @@ describe("allow-listed Prometheus performance reader", () => {
       }
     };
 
-    const snapshot = await reader(client, await loadCatalog("catalog/services.json")).getPerformance("demo", "portfolio", "1h");
+    const snapshot = await reader(client, await loadCatalog("catalog/services.json")).getPerformance("portfolio", "portfolio", "1h");
     const total = snapshot.metrics.find((metric) => metric.id === "request-total");
 
     expect(total).toMatchObject({ label: "Requests in selected window", unit: "requests", latest: 42 });

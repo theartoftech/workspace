@@ -26,7 +26,7 @@
         "id": { "$ref": "#/$defs/identifier" },
         "displayName": { "type": "string", "minLength": 1 },
         "kind": { "enum": ["application", "identity", "mail", "erp"] },
-        "environment": { "enum": ["demo", "test", "shared"] },
+        "environment": { "enum": ["demo", "test", "portfolio", "shared"] },
         "owner": { "type": "string", "minLength": 1 },
         "criticality": { "enum": ["critical", "high", "medium"] },
         "probes": {

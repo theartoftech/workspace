@@ -51,7 +51,7 @@ services:
       CATALOG_PATH: /app/catalog/services.json
       UPSTREAM_TIMEOUT_MS: "3000"
       SOURCE_STALE_AFTER_SECONDS: "180"
-      KUBERNETES_API_URL: ${KUBERNETES_API_URL:-https://host.docker.internal:6443}
+      KUBERNETES_API_URL: ${KUBERNETES_API_URL:-https://192.168.86.246:6443}
       KUBERNETES_TOKEN_FILE: /run/secrets/kubernetes_inventory_token
       KUBERNETES_TOOL_URL: "#kubernetes-api-no-browser-link"
       PROMETHEUS_API_URL: http://prometheus:9090

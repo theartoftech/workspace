@@ -454,6 +454,14 @@ prepare_runtime_data() {
         fail "Gatus data directories are not writable under: $data_directory"
 }
 
+validate_kubernetes_credential() {
+    local data_directory
+    data_directory="$(resolve_env_path "$(env_value MONITORING_DATA_DIR)")"
+    local token_file="$data_directory/runtime-secrets/kubernetes_inventory_token"
+    [[ -s "$token_file" ]] || \
+        fail "Kubernetes inventory credential is missing or empty: $token_file. Create the read-only service-account token before preflight or deploy."
+}
+
 verify_http() {
     local name="$1"
     local url="$2"
@@ -497,19 +505,26 @@ verify_portal_routes() {
         fail "Portal bundle does not contain the required live-inventory disclosure."
     grep -Fq 'Prometheus telemetry' <<< "$bundle" || \
         fail "Portal bundle does not contain the required Prometheus performance interface."
+    grep -Fq 'Kubernetes inventory' <<< "$bundle" || \
+        fail "Portal bundle does not contain the required infrastructure topology interface."
 
     local inventory
     inventory="$(fetch_http "Inventory API" "http://127.0.0.1:3100/api/v1/inventory?environment=all")"
     grep -Fq '"apiVersion":1' <<< "$inventory" || fail "Inventory API response has no supported API version."
     grep -Fq '"id":"cpq-demo"' <<< "$inventory" || fail "Inventory API response is missing CPQ Demo."
     grep -Fq '"id":"portfolio"' <<< "$inventory" || fail "Inventory API response is missing the portfolio site."
+    local topology
+    topology="$(fetch_http "Topology API" "http://127.0.0.1:3100/api/v1/topology?environment=all")"
+    grep -Fq '"apiVersion":1' <<< "$topology" || fail "Topology API response has no supported API version."
+    grep -Fq '"name":"kubernetes"' <<< "$topology" || fail "Topology API response is missing its Kubernetes source label."
+    grep -Fq '"kind":"Node"' <<< "$topology" || fail "Topology API response contains no node inventory; review the read-only RBAC binding."
     local performance
     performance="$(fetch_http "Performance API" "http://127.0.0.1:3100/api/v1/performance?environment=demo&service=cpq-demo&range=1h")"
     grep -Fq '"apiVersion":1' <<< "$performance" || fail "Performance API response has no supported API version."
     grep -Fq '"serviceId":"cpq-demo"' <<< "$performance" || fail "Performance API response did not retain the selected service."
     grep -Fq '"id":"request-rate"' <<< "$performance" || fail "Performance API response is missing request-rate telemetry."
     local portfolio_performance
-    portfolio_performance="$(fetch_http "Portfolio performance API" "http://127.0.0.1:3100/api/v1/performance?environment=demo&service=portfolio&range=1h")"
+    portfolio_performance="$(fetch_http "Portfolio performance API" "http://127.0.0.1:3100/api/v1/performance?environment=portfolio&service=portfolio&range=1h")"
     grep -Fq '"serviceId":"portfolio"' <<< "$portfolio_performance" || fail "Performance API response did not retain the portfolio service."
     grep -Eq '"id":"request-total"[^}]*"status":"ok"' <<< "$portfolio_performance" || \
         fail "Portfolio request-total telemetry is unavailable; deploy the private Nginx exporter before the monitoring stack."
@@ -570,6 +585,7 @@ case "$COMMAND" in
         ;;
     preflight)
         validate_runtime_environment
+        validate_kubernetes_credential
         validate_portal_sources
         validate_compose
         docker info >/dev/null
@@ -585,11 +601,13 @@ case "$COMMAND" in
         validate_portal_capacity
         validate_portal_port
         prepare_runtime_data
+        validate_kubernetes_credential
         echo "Pulling pinned images for the single-host lab profile..."
         compose pull prometheus grafana blackbox-exporter node-exporter cadvisor gatus-internal gatus-public-path
         echo "Building portal and inventory API images for revision ${PORTAL_BUILD_REVISION}..."
         compose build --pull inventory-api portal
         echo "Deploying single-host lab monitoring stack..."
+        compose up -d --remove-orphans --force-recreate gatus-internal gatus-public-path
         compose up -d --remove-orphans
         verify_stack
         printf '%s\n' "$PORTAL_BUILD_REVISION" > "$RUNTIME_DIR/portal-revision"
@@ -599,6 +617,8 @@ case "$COMMAND" in
         compose ps
         ;;
     verify)
+        validate_runtime_environment
+        validate_kubernetes_credential
         validate_compose
         verify_stack
         ;;

@@ -18,7 +18,7 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Public-path simulation | Public CPQ demo and ERPNet URLs, including TLS expiry, from the same CPQ server—not an independent external vantage |
 | Alert delivery | Deferred until notification destinations and credential handling are selected |
 
-Overview, deployments, and service detail use live inventory. Performance uses live Prometheus range queries. Infrastructure, incidents, and settings remain explicitly labeled fixture previews until their planned sprints. SSO, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.
+Overview, deployments, service detail, and infrastructure topology use live inventory. Performance uses live Prometheus range queries. Incident selection, acknowledgment, runbooks, and declaration work for the current browser session and are explicitly labeled non-persistent until the incident API sprint. Settings remains a preview. SSO, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.
 
 ## Repository layout
 
@@ -29,10 +29,11 @@ Overview, deployments, and service detail use live inventory. Performance uses l
 - `deploy/compose/lab-observability` — primary single-host Docker lab stack.
 - `deploy/portal` — digest-pinned multi-stage portal image and hardened Nginx runtime.
 - `deploy/inventory-api` — digest-pinned, unprivileged Node image for the read-only inventory API.
-- `deploy/kubernetes/inventory-reader-rbac.yaml` — namespace-bounded, get-only Kubernetes RBAC.
+- `deploy/kubernetes/inventory-reader-rbac.yaml` — namespace-bounded, read-only Kubernetes topology RBAC.
 - `server/src` and `shared` — typed upstream adapters, aggregation/API logic, and browser/server contracts.
 - `deployment/scripts` — guarded plan, preflight, deploy, status, and verification commands.
 - `deployment/PORTAL_ROLLBACK.md` — independent portal-image and Cloudflare-origin rollback procedures.
+- `documentation/adr/0004-kubernetes-topology-architecture.md` — bounded topology API, issue taxonomy, UI scaling, and RBAC decision.
 - `deployment/ENVIRONMENTS.md` — target topology, secret preparation, and operator workflow.
 - `probes/internal` — Gatus node intended to run inside the lab network.
 - `probes/external` — Gatus node intended to run on an independent public host.
@@ -73,7 +74,7 @@ npm run lint
 npm run build
 ```
 
-The live route set includes Overview, Deployments, Performance, and `/services/<catalog-id>`. Infrastructure, Incidents, and Settings retain explicit preview data. The API accepts only GET/HEAD; performance queries are selected from server-owned templates, ranges are bounded and down-sampled, and the browser never receives infrastructure credentials or arbitrary PromQL access.
+The live route set includes Overview, Deployments, Infrastructure, Performance, and `/services/<catalog-id>`. Incidents and Settings retain explicit preview data. The API accepts only GET/HEAD; topology inventory is server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives infrastructure credentials or arbitrary PromQL access.
 
 ## Acceptance criteria
 

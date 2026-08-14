@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { InventoryEnvironment, InventorySnapshot, ServiceDetailResponse } from "../../shared/inventory";
 import type { PerformanceRange, PerformanceSnapshot } from "../../shared/performance";
 import { PerformanceRequestError } from "./prometheus";
+import type { TopologyReader } from "./topology";
 
 export interface InventoryReader {
   getInventory(environment: string): Promise<InventorySnapshot>;
@@ -23,9 +24,10 @@ interface ApiErrorBody {
   };
 }
 
-const environments = new Set<InventoryEnvironment>(["all", "demo", "test", "shared"]);
+const environments = new Set<InventoryEnvironment>(["all", "demo", "test", "portfolio", "shared"]);
 const performanceRanges = new Set<PerformanceRange>(["15m", "1h", "6h", "24h"]);
 const performanceParameters = new Set(["environment", "service", "range"]);
+const topologyParameters = new Set(["environment"]);
 
 function responseHeaders(extra: Readonly<Record<string, string>> = {}): Headers {
   return new Headers({
@@ -60,7 +62,7 @@ function serviceIdFrom(pathname: string): string | null {
   }
 }
 
-export async function handleInventoryRequest(request: Request, reader: InventoryReader, performanceReader?: PerformanceReader): Promise<Response> {
+export async function handleInventoryRequest(request: Request, reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader): Promise<Response> {
   const headOnly = request.method === "HEAD";
   if (request.method !== "GET" && !headOnly) {
     return jsonResponse(405, errorBody("method_not_allowed", "Only read-only GET and HEAD requests are supported."), false, { Allow: "GET, HEAD" });
@@ -87,6 +89,19 @@ export async function handleInventoryRequest(request: Request, reader: Inventory
     } catch (cause: unknown) {
       if (cause instanceof PerformanceRequestError) return jsonResponse(400, errorBody("invalid_performance_filter", cause.message), headOnly);
       return jsonResponse(500, errorBody("performance_unavailable", "Performance telemetry could not be assembled."), headOnly);
+    }
+  }
+
+  if (url.pathname === "/api/v1/topology") {
+    if (topologyReader === undefined) return jsonResponse(503, errorBody("topology_unavailable", "Infrastructure topology is not configured."), headOnly);
+    const unexpected = [...url.searchParams.keys()].find((parameter) => !topologyParameters.has(parameter));
+    if (unexpected !== undefined) return jsonResponse(400, errorBody("invalid_parameter", `Unsupported topology parameter: ${unexpected}`), headOnly);
+    const environment = url.searchParams.get("environment") ?? "all";
+    if (!environments.has(environment as InventoryEnvironment)) return jsonResponse(400, errorBody("invalid_environment", `Unsupported environment: ${environment}`), headOnly);
+    try {
+      return jsonResponse(200, await topologyReader.getTopology(environment), headOnly);
+    } catch {
+      return jsonResponse(500, errorBody("topology_unavailable", "Infrastructure topology could not be assembled."), headOnly);
     }
   }
 
@@ -122,10 +137,10 @@ export async function handleInventoryRequest(request: Request, reader: Inventory
   return jsonResponse(404, errorBody("not_found", "The requested API route does not exist."), headOnly);
 }
 
-export function createInventoryHttpServer(reader: InventoryReader, performanceReader?: PerformanceReader): Server {
+export function createInventoryHttpServer(reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader): Server {
   return createServer((incoming, outgoing) => {
     const request = new Request(new URL(incoming.url ?? "/", "http://inventory-api.local"), { method: safeNodeRequestMethod(incoming.method) });
-    void handleInventoryRequest(request, reader, performanceReader).then(async (response) => {
+    void handleInventoryRequest(request, reader, performanceReader, topologyReader).then(async (response) => {
       outgoing.statusCode = response.status;
       response.headers.forEach((value, key) => outgoing.setHeader(key, value));
       outgoing.end(Buffer.from(await response.arrayBuffer()));

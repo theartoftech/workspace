@@ -1,4 +1,4 @@
-export type InventoryEnvironment = "all" | "demo" | "test" | "shared";
+export type InventoryEnvironment = "all" | "demo" | "test" | "portfolio" | "shared";
 export type ServiceEnvironment = Exclude<InventoryEnvironment, "all">;
 export type HealthState = "healthy" | "degraded" | "failing" | "unknown" | "paused" | "stale";
 export type InventoryMode = "live" | "partial";

@@ -153,6 +153,7 @@ class PortalPackagingContractTests(unittest.TestCase):
     def test_inventory_api_is_reproducible_unprivileged_and_not_host_exposed(self) -> None:
         dockerfile = (ROOT / "deploy/inventory-api/Dockerfile").read_text(encoding="utf-8")
         compose = (STACK_DIR / "compose.yaml").read_text(encoding="utf-8")
+        example_environment = (STACK_DIR / ".env.example").read_text(encoding="utf-8")
         api = compose.split("  inventory-api:\n", maxsplit=1)[1].split("\n  prometheus:", maxsplit=1)[0]
 
         self.assertRegex(dockerfile, r"FROM node:[^\s]+@sha256:[0-9a-f]{64} AS build")
@@ -167,6 +168,8 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("cap_drop:\n      - ALL", api)
         self.assertNotIn("ports:", api)
         self.assertIn("KUBERNETES_TOKEN_FILE: /run/secrets/kubernetes_inventory_token", api)
+        self.assertIn("KUBERNETES_API_URL: ${KUBERNETES_API_URL:-https://192.168.86.246:6443}", api)
+        self.assertIn("KUBERNETES_API_URL=https://192.168.86.246:6443", example_environment)
         self.assertIn("PROMETHEUS_API_URL: http://prometheus:9090", api)
         self.assertIn('PROMETHEUS_CONCURRENCY: "4"', api)
         self.assertIn("depends_on:\n      - prometheus", api)
@@ -309,6 +312,9 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
             temporary = Path(temporary_directory)
             password_file = temporary / "grafana_admin_password"
             password_file.write_text("valid-test-password\n", encoding="utf-8")
+            token_file = temporary / "data" / "runtime-secrets" / "kubernetes_inventory_token"
+            token_file.parent.mkdir(parents=True)
+            token_file.write_text("test-read-only-token\n", encoding="utf-8")
             environment_file = temporary / ".env"
             environment_file.write_text(
                 "\n".join(
@@ -343,6 +349,9 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
             temporary = Path(temporary_directory)
             password_file = temporary / "grafana_admin_password"
             password_file.write_text("valid-test-password\n", encoding="utf-8")
+            token_file = temporary / "data" / "runtime-secrets" / "kubernetes_inventory_token"
+            token_file.parent.mkdir(parents=True)
+            token_file.write_text("test-read-only-token\n", encoding="utf-8")
             environment_file = temporary / ".env"
             environment_file.write_text(
                 "\n".join(
@@ -520,7 +529,10 @@ exit 1
             self.assertIn(f'"{route}"', source)
         self.assertIn("/api/v1/inventory?environment=all", source)
         self.assertIn("/api/v1/performance?environment=demo&service=cpq-demo&range=1h", source)
-        self.assertIn("/api/v1/performance?environment=demo&service=portfolio&range=1h", source)
+        self.assertIn("/api/v1/performance?environment=portfolio&service=portfolio&range=1h", source)
+        self.assertIn("--force-recreate gatus-internal gatus-public-path", source)
+        self.assertIn("kubernetes_inventory_token", source)
+        self.assertIn("/api/v1/topology?environment=all", source)
         self.assertIn('"apiVersion":1', source)
         self.assertIn('"serviceId":"cpq-demo"', source)
         self.assertIn('"id":"request-rate"', source)
@@ -529,6 +541,7 @@ exit 1
         self.assertIn("/tools/gatus-internal/api/v1/endpoints/statuses", source)
         self.assertIn("Live inventory", source)
         self.assertIn("Prometheus telemetry", source)
+        self.assertIn("Kubernetes inventory", source)
         self.assertIn("validate_portal_port", source)
         self.assertIn("PORTAL_BUILD_REVISION", source)
 
@@ -553,6 +566,9 @@ exit 1
             temporary = Path(temporary_directory)
             password_file = temporary / "grafana_admin_password"
             password_file.write_text("valid-test-password\n", encoding="utf-8")
+            token_file = temporary / "data" / "runtime-secrets" / "kubernetes_inventory_token"
+            token_file.parent.mkdir(parents=True)
+            token_file.write_text("test-read-only-token\n", encoding="utf-8")
             environment_file = temporary / ".env"
             environment_file.write_text(
                 "\n".join(
@@ -591,12 +607,14 @@ if [[ " $* " == *"/tools/gatus-internal/api/v1/endpoints/statuses"* ]]; then
     printf '[{"name":"cpq-demo-ready-internal"},{"name":"portfolio-home-internal"}]'
 elif [[ " $* " == *"/api/v1/inventory?environment=all"* ]]; then
     printf '{"apiVersion":1,"services":[{"id":"cpq-demo"},{"id":"portfolio"}]}'
+elif [[ " $* " == *"/api/v1/topology?environment=all"* ]]; then
+    printf '{"apiVersion":1,"source":{"name":"kubernetes"},"resources":[{"kind":"Node"}]}'
 elif [[ " $* " == *"/api/v1/performance?environment=demo&service=cpq-demo&range=1h"* ]]; then
     printf '{"apiVersion":1,"serviceId":"cpq-demo","metrics":[{"id":"request-rate"}]}'
-elif [[ " $* " == *"/api/v1/performance?environment=demo&service=portfolio&range=1h"* ]]; then
+elif [[ " $* " == *"/api/v1/performance?environment=portfolio&service=portfolio&range=1h"* ]]; then
     printf '{"apiVersion":1,"serviceId":"portfolio","metrics":[{"id":"request-total","status":"ok"}]}'
 elif [[ " $* " == *" http://127.0.0.1:3100/assets/"* ]]; then
-    printf 'Live inventory Prometheus telemetry'
+    printf 'Live inventory Prometheus telemetry Kubernetes inventory'
 elif [[ " $* " == *" http://127.0.0.1:3100/"* && " $* " != *"/healthz"* ]]; then
     printf '<title>Workspace Monitor</title><script src="/assets/index-test.js"></script>'
 fi

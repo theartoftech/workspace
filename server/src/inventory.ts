@@ -17,7 +17,7 @@ import type { SourceCollection, SourceCollector, SourceObservation } from "./sou
 
 export type { SourceCollection, SourceCollector } from "./source";
 
-const environments = new Set<InventoryEnvironment>(["all", "demo", "test", "shared"]);
+const environments = new Set<InventoryEnvironment>(["all", "demo", "test", "portfolio", "shared"]);
 
 function iso(value: string | null): string | null {
   if (value === null) return null;

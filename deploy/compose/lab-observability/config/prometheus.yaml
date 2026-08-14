@@ -25,7 +25,7 @@ scrape_configs:
           - public-website-metrics.public-site.svc.cluster.local:9113
         labels:
           service: portfolio
-          environment: demo
+          environment: portfolio
           source: nginx-exporter
 
   - job_name: node-exporter

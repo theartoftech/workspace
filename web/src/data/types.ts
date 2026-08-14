@@ -7,6 +7,7 @@ import type {
   ServiceInventory
 } from "../../../shared/inventory";
 import type { PerformanceRange, PerformanceSnapshot } from "../../../shared/performance";
+import type { TopologySnapshot } from "../../../shared/topology";
 
 export type EnvironmentId = InventoryEnvironment;
 export type TimeRange = PerformanceRange;
@@ -21,6 +22,11 @@ export interface IncidentSummary {
   readonly status: "investigating" | "monitoring";
   readonly startedAt: string;
   readonly assignee: string;
+  readonly acknowledged: boolean;
+  readonly description: string;
+  readonly owner: string;
+  readonly errorBudget: string;
+  readonly runbookSteps: readonly string[];
 }
 
 export interface TrafficPoint {
@@ -46,6 +52,8 @@ export interface OverviewSnapshot {
 export interface MonitoringProvider {
   getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot>;
   getPerformance(environment: EnvironmentId, serviceId: string, timeRange: TimeRange): Promise<PerformanceSnapshot>;
+  readonly getTopology?: (environment: EnvironmentId) => Promise<TopologySnapshot>;
 }
 
 export type { PerformanceSnapshot } from "../../../shared/performance";
+export type { TopologySnapshot } from "../../../shared/topology";

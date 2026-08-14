@@ -9,6 +9,7 @@ import { InventoryAggregator } from "./inventory";
 import { KubernetesAdapter } from "./kubernetes";
 import { PrometheusPerformanceReader } from "./prometheus";
 import { UnavailableSourceCollector, type SourceCollector } from "./source";
+import { KubernetesTopologyReader, UnavailableTopologyReader, type TopologyReader } from "./topology";
 import runtimePackage from "../package.json";
 
 if (runtimePackage.type !== "commonjs") throw new Error("Inventory API runtime must use CommonJS modules");
@@ -42,6 +43,21 @@ async function kubernetesCollector(
   });
 }
 
+async function topologyReader(
+  config: ReturnType<typeof parseRuntimeConfig>,
+  catalog: Awaited<ReturnType<typeof loadCatalog>>,
+  client: FetchJsonHttpClient
+): Promise<TopologyReader> {
+  let token: string;
+  try {
+    token = (await readFile(config.kubernetes.tokenFile, "utf8")).trim();
+  } catch {
+    return new UnavailableTopologyReader("Kubernetes read-only credential file is unavailable");
+  }
+  if (token === "") return new UnavailableTopologyReader("Kubernetes read-only credential file is empty");
+  return new KubernetesTopologyReader({ ...config.kubernetes, bearerToken: token, catalog, client });
+}
+
 async function run(): Promise<void> {
   const config = parseRuntimeConfig(process.env);
   const catalog = await loadCatalog(config.catalogPath);
@@ -58,7 +74,8 @@ async function run(): Promise<void> {
       catalog,
       client,
       concurrency: config.prometheus.concurrency
-    })
+    }),
+    await topologyReader(config, catalog, client)
   );
   server.listen(config.port, "0.0.0.0", () => {
     process.stdout.write(`Workspace Monitor inventory API listening on port ${config.port}\n`);

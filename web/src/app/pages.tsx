@@ -18,12 +18,13 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import type { PerformanceMetric, PerformanceMetricId } from "../../../shared/performance";
+import type { TopologyResource, TopologyResourceKind, TopologySnapshot } from "../../../shared/topology";
 import { StateGallery } from "../components/StateGallery";
 import { StatusBadge } from "../components/StatusBadge";
-import type { MonitoringProvider, OverviewSnapshot, PerformanceSnapshot, TimeRange } from "../data/types";
+import type { IncidentSummary, MonitoringProvider, OverviewSnapshot, PerformanceSnapshot, TimeRange } from "../data/types";
 
 interface SnapshotPageProps {
   readonly snapshot: OverviewSnapshot;
@@ -87,6 +88,24 @@ function MetricCard({
 
 type ServiceRow = OverviewSnapshot["services"][number];
 
+function environmentLabel(environment: ServiceRow["environment"]): string {
+  const labels = { demo: "Demo / Prod", test: "Test", portfolio: "Portfolio", shared: "Shared" } as const;
+  return labels[environment];
+}
+
+function serviceStateReason(service: ServiceRow): string | null {
+  if (service.state === "degraded"
+    && service.probes.length > 0
+    && service.probes.every((probe) => probe.state === "healthy")
+    && service.workloads.some((workload) => workload.state === "unknown")) {
+    return "Healthy readiness probe; Kubernetes workload evidence unavailable";
+  }
+  if (service.state === "unknown" && service.probes.every((probe) => probe.state === "unknown")) {
+    return "No probe observation is available";
+  }
+  return null;
+}
+
 function formattedTimestamp(value: string | null): string {
   if (value === null) return "No observation";
   const timestamp = new Date(value);
@@ -128,8 +147,8 @@ function ServiceTable({ services }: { readonly services: readonly ServiceRow[] }
                   </div>
                 </div>
               </td>
-              <td><StatusBadge status={service.state} /></td>
-              <td><span className="environment-chip">{service.environment}</span></td>
+              <td><StatusBadge status={service.state} />{serviceStateReason(service) !== null && <span className="status-explanation">{serviceStateReason(service)}</span>}</td>
+              <td><span className="environment-chip">{environmentLabel(service.environment)}</span></td>
               <td><span className={`comparison comparison-${service.reachability.comparison}`}>{service.reachability.comparison.replace("-", " ")}</span></td>
               <td><a className="endpoint-link" href={service.endpoint} target="_blank" rel="noreferrer">{service.endpoint}</a></td>
               <td><code>{service.version ?? "Unavailable"}</code></td>
@@ -194,7 +213,7 @@ export function OverviewPage({ snapshot }: SnapshotPageProps): React.JSX.Element
 
       <section>
         <article className="panel services-panel inventory-panel">
-          <PanelHeader title="Service inventory" meta={`${snapshot.services.length} services in current scope`} />
+          <PanelHeader title="Service inventory" meta={`${snapshot.services.length} ${snapshot.services.length === 1 ? "service" : "services"} in current scope`} />
           <ServiceTable services={snapshot.services} />
         </article>
       </section>
@@ -211,7 +230,7 @@ export function ServiceDetailPage({ snapshot }: SnapshotPageProps): React.JSX.El
   return (
     <>
       <PageHeader
-        eyebrow={`Inventory / ${service.environment}`}
+        eyebrow={`Inventory / ${environmentLabel(service.environment)}`}
         title={service.name}
         description="Read-only service detail assembled from catalog, reachability probes, and mapped workloads."
         action={<Link className="secondary-button" to="/">Back to inventory</Link>}
@@ -220,7 +239,7 @@ export function ServiceDetailPage({ snapshot }: SnapshotPageProps): React.JSX.El
         <MetricCard label="Current state" value={service.state} note={`Criticality: ${service.criticality}`} tone={service.state === "healthy" ? "positive" : service.state === "failing" ? "danger" : "warning"} icon={CheckCircleIcon} />
         <MetricCard label="Last check" value={formattedTimestamp(service.lastCheckedAt)} note="Preserved source timestamp" icon={GaugeIcon} />
         <MetricCard label="Version" value={service.version ?? "Unavailable"} note="Kubernetes image tag or digest" icon={GitBranchIcon} />
-        <MetricCard label="Owner" value={service.owner} note={service.environment} icon={UsersThreeIcon} />
+        <MetricCard label="Owner" value={service.owner} note={environmentLabel(service.environment)} icon={UsersThreeIcon} />
       </section>
       <section className="overview-grid detail-grid">
         <article className="panel">
@@ -245,6 +264,7 @@ export function ServiceDetailPage({ snapshot }: SnapshotPageProps): React.JSX.El
                 <div><strong>{workload.name}</strong><span>{workload.kind} · {workload.namespace}</span></div>
                 <StatusBadge status={workload.state} />
                 <span>{workload.ready ?? "?"}/{workload.desired ?? "?"} ready · {workload.version ?? "version unavailable"}</span>
+                <Link to={`/infrastructure?resource=${encodeURIComponent(`${workload.kind}:${workload.namespace}:${workload.name}`)}`}>View topology</Link>
                 {!workload.sourceToolUrl.startsWith("#") && <a href={workload.sourceToolUrl} target="_blank" rel="noreferrer">Open source <ArrowUpRightIcon aria-hidden="true" size={14} /></a>}
               </div>
             ))}
@@ -284,47 +304,84 @@ export function DeploymentsPage({ snapshot }: SnapshotPageProps): React.JSX.Elem
   );
 }
 
-export function InfrastructurePage(): React.JSX.Element {
-  const resources = [
-    { label: "cpqserver", meta: "Ubuntu · 8 vCPU · 32 GB", icon: HardDrivesIcon, status: "healthy" as const },
-    { label: "k3s cluster", meta: "1 node · 18 workloads", icon: StackIcon, status: "degraded" as const },
-    { label: "Docker runtime", meta: "16 containers · 0 exited", icon: CodeIcon, status: "healthy" as const },
-    { label: "Persistent data", meta: "46% used · 181 GB free", icon: DatabaseIcon, status: "healthy" as const }
-  ];
+interface InfrastructurePageProps extends SnapshotPageProps {
+  readonly provider: MonitoringProvider;
+  readonly environment: OverviewSnapshot["environment"];
+  readonly refreshKey: number;
+}
+
+const topologyKinds: readonly TopologyResourceKind[] = ["Node", "Namespace", "Deployment", "StatefulSet", "Pod", "Service", "PersistentVolumeClaim", "Ingress"];
+
+function issueLabel(resource: TopologyResource): string {
+  const labels = { "crash-loop": "Crash loop", pending: "Scheduling pending", "failed-mount": "Failed mount", "node-pressure": "Node pressure", restarts: "Container restarts", "storage-capacity": "Storage capacity", unavailable: "Unavailable" } as const;
+  return resource.issueCode === null ? "No active issue" : labels[resource.issueCode];
+}
+
+export function InfrastructurePage({ snapshot, provider, environment, refreshKey }: InfrastructurePageProps): React.JSX.Element {
+  const [topology, setTopology] = useState<TopologySnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<TopologyResourceKind | "all">("all");
+  const [page, setPage] = useState(1);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get("resource");
+
+  useEffect(() => {
+    let active = true; setTopology(null); setError(null);
+    const load = provider.getTopology;
+    if (load === undefined) { setError("Topology provider is not configured."); return () => { active = false; }; }
+    load(environment).then((value) => { if (active) setTopology(value); }).catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : "Topology request failed"); });
+    return () => { active = false; };
+  }, [environment, provider, refreshKey]);
+
+  const filtered = useMemo(() => (topology?.resources ?? []).filter((resource) => {
+    const matchesKind = kind === "all" || resource.kind === kind;
+    const haystack = `${resource.kind} ${resource.namespace ?? "cluster"} ${resource.name} ${resource.summary} ${resource.serviceIds.join(" ")}`.toLowerCase();
+    return matchesKind && haystack.includes(query.trim().toLowerCase());
+  }), [kind, query, topology]);
+  const pageSize = 25; const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const visible = filtered.slice((Math.min(page, pageCount) - 1) * pageSize, Math.min(page, pageCount) * pageSize);
+  const selected = topology?.resources.find((resource) => resource.id === selectedId) ?? null;
+  const inventoryUnavailable = topology?.source.availability === "unavailable";
+  const nodes = topology?.resources.filter((resource) => resource.kind === "Node") ?? [];
+  const workloads = topology?.resources.filter((resource) => ["Deployment", "StatefulSet", "Pod"].includes(resource.kind)) ?? [];
+  const attention = topology?.resources.filter((resource) => resource.state !== "healthy").length ?? 0;
+  const dependencyEdges = topology?.edges.filter((edge) => edge.relation === "depends-on" || edge.relation === "observes") ?? [];
+  const topologyLabel = (id: string): string => {
+    if (id === "platform:prometheus") return "Prometheus";
+    if (id === "probe:gatus-internal") return "Gatus internal";
+    if (id === "probe:gatus-public-path") return "Gatus public path";
+    if (id.startsWith("service:")) return snapshot.services.find((service) => service.id === id.slice(8))?.name ?? id.slice(8);
+    return topology?.resources.find((resource) => resource.id === id)?.name ?? id;
+  };
   return (
     <>
-      <PageHeader eyebrow="Operations / Infrastructure" title="Infrastructure" description="Host, cluster, runtime, and dependency posture for the development lab." action={<button className="secondary-button" type="button">Open topology</button>} />
-      <section className="resource-grid" aria-label="Infrastructure resources">
-        {resources.map((resource) => {
-          const Icon = resource.icon;
-          return (
-            <article className="resource-card" key={resource.label}>
-              <div className="resource-icon"><Icon aria-hidden="true" size={22} /></div>
-              <div><strong>{resource.label}</strong><span>{resource.meta}</span></div>
-              <StatusBadge status={resource.status} compact />
-            </article>
-          );
-        })}
+      <PageHeader eyebrow="Operations / Infrastructure" title="Infrastructure" description="Drill from the selected environment into Kubernetes workloads, nodes, storage, networking, and dependencies." />
+      <section className="metrics-grid compact-metrics" aria-label="Infrastructure summary">
+        <MetricCard label="Namespaces" value={String(topology?.namespaces.length ?? 0)} note={topology?.namespaces.join(", ") || "No mapped namespaces"} icon={StackIcon} />
+        <MetricCard label="Nodes" value={String(nodes.length)} note={`${nodes.filter((node) => node.state === "healthy").length} ready`} tone={nodes.some((node) => node.state !== "healthy") ? "warning" : "positive"} icon={HardDrivesIcon} />
+        <MetricCard label="Workloads" value={String(workloads.length)} note={`${workloads.filter((item) => item.state === "healthy").length} healthy`} tone={attention > 0 ? "warning" : "positive"} icon={CodeIcon} />
+        <MetricCard label="Needs attention" value={String(attention)} note={topology?.truncated ? "Inventory result capped" : "All returned resources"} tone={attention > 0 ? "danger" : "positive"} icon={WarningCircleIcon} />
       </section>
-      <section className="overview-grid infrastructure-layout">
-        <article className="panel topology-panel">
-          <PanelHeader title="Dependency topology" meta="Logical lab relationships" />
-          <div className="topology-lanes">
-            <div className="topology-column"><span>EDGE</span><div className="topology-card"><GlobeHemisphereWestIcon size={20} aria-hidden="true" /><strong>Cloudflare</strong><small>Tunnel healthy</small></div></div>
-            <div className="topology-column"><span>APPLICATIONS</span><div className="topology-card"><CloudIcon size={20} aria-hidden="true" /><strong>CPQ</strong><small>Demo + test</small></div><div className="topology-card"><CodeIcon size={20} aria-hidden="true" /><strong>ERPNext</strong><small>Demo</small></div></div>
-            <div className="topology-column"><span>PLATFORM</span><div className="topology-card topology-warning"><IdentificationCardIcon size={20} aria-hidden="true" /><strong>Keycloak</strong><small>Latency elevated</small></div><div className="topology-card"><DatabaseIcon size={20} aria-hidden="true" /><strong>Data stores</strong><small>Healthy</small></div></div>
-          </div>
-        </article>
-        <article className="panel capacity-panel">
-          <PanelHeader title="Host capacity" meta="cpqserver fixture utilization" />
-          {[ ["CPU", 38], ["Memory", 62], ["Disk", 54], ["Container quota", 71] ].map(([label, value]) => (
-            <div className="capacity-row" key={label}>
-              <div><span>{label}</span><strong>{value}%</strong></div>
-              <progress max="100" value={value} aria-label={`${label} utilization ${value}%`} />
-            </div>
-          ))}
-        </article>
-      </section>
+      {error !== null && <section className="topology-source topology-source-error" role="alert"><WarningCircleIcon size={18} aria-hidden="true" /><div><strong>Topology unavailable</strong><span>{error}</span></div></section>}
+      {topology?.source.availability === "unavailable" && <section className="topology-source topology-source-error" role="status"><WarningCircleIcon size={18} aria-hidden="true" /><div><strong>Kubernetes unavailable</strong><span>{topology.source.message}</span></div></section>}
+      <article className="panel topology-panel">
+        <PanelHeader title="Dependency topology" meta={`${dependencyEdges.length} live catalog and observer relationships`} />
+        <div className="topology-lanes">
+          <div className="topology-column"><span>PROBES</span><div className="topology-card"><GlobeHemisphereWestIcon size={20} aria-hidden="true" /><strong>Gatus nodes</strong><small>Internal + public path</small></div></div>
+          <div className="topology-column"><span>SERVICES</span>{snapshot.services.map((service) => <div className={`topology-card ${service.state !== "healthy" ? "topology-warning" : ""}`} key={service.id}><CloudIcon size={20} aria-hidden="true" /><strong>{service.name}</strong><small>{service.environment} · {service.state}</small></div>)}</div>
+          <div className="topology-column"><span>PLATFORM</span><div className="topology-card"><GaugeIcon size={20} aria-hidden="true" /><strong>Prometheus</strong><small>Metrics observer</small></div>{nodes.map((node) => <button type="button" className={`topology-card topology-card-button ${node.state !== "healthy" ? "topology-warning" : ""}`} key={node.id} onClick={() => setSearchParams({ resource: node.id })}><HardDrivesIcon size={20} aria-hidden="true" /><strong>{node.name}</strong><small>{node.summary}</small></button>)}</div>
+        </div>
+        <div className="dependency-edge-list" aria-label="Dependency relationships">{dependencyEdges.map((edge, index) => <div key={`${edge.from}:${edge.to}:${index}`}><strong>{topologyLabel(edge.from)}</strong><span>{edge.relation.replace("-", " ")}</span><strong>{topologyLabel(edge.to)}</strong></div>)}{topology !== null && dependencyEdges.length === 0 && <p className="empty-panel-copy">No dependency relationships are mapped in this environment.</p>}</div>
+      </article>
+      <article className="panel topology-inventory-panel">
+        <PanelHeader title="Kubernetes inventory" meta={topology === null ? "Loading live resources" : `${filtered.length} matching resources${topology.truncated ? " · capped by server" : ""}`} />
+        <div className="topology-controls"><label><span>Search inventory</span><input type="search" value={query} disabled={inventoryUnavailable} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Name, namespace, state, or service" /></label><label><span>Resource kind</span><select value={kind} disabled={inventoryUnavailable} onChange={(event) => { setKind(event.target.value as TopologyResourceKind | "all"); setPage(1); }}><option value="all">All kinds</option>{topologyKinds.map((item) => <option value={item} key={item}>{item}</option>)}</select></label></div>
+        <div className="table-scroll"><table><thead><tr><th scope="col">Resource</th><th scope="col">Namespace</th><th scope="col">State</th><th scope="col">Explanation</th><th scope="col">Source</th></tr></thead><tbody>{visible.map((resource) => <tr key={resource.id}><td><button className="resource-link-button" type="button" onClick={() => setSearchParams({ resource: resource.id })}><strong>{resource.name}</strong><span>{resource.kind}</span></button></td><td>{resource.namespace ?? "Cluster"}</td><td><StatusBadge status={resource.state} /></td><td><strong className={resource.issueCode === null ? "topology-ok" : "topology-issue"}>{issueLabel(resource)}</strong><span className="resource-summary">{resource.summary}</span></td><td>{resource.sourceLabel}</td></tr>)}</tbody></table></div>
+        {topology !== null && visible.length === 0 && <p className="empty-panel-copy topology-empty">{inventoryUnavailable ? "Search is disabled until the Kubernetes credential is available." : "No resources match the current search and kind filter."}</p>}
+        <div className="topology-pagination"><span>Page {Math.min(page, pageCount)} of {pageCount}</span><div><button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><button type="button" disabled={page >= pageCount} onClick={() => setPage((value) => value + 1)}>Next</button></div></div>
+      </article>
+      {selected !== null && <div className="topology-drawer-backdrop" role="presentation" onMouseDown={() => setSearchParams({})}><aside className="topology-drawer" role="dialog" aria-modal="true" aria-label={`${selected.name} resource details`} onMouseDown={(event) => event.stopPropagation()}><button className="text-button drawer-close" type="button" onClick={() => setSearchParams({})}>Close</button><span className="eyebrow">{selected.kind} / {selected.namespace ?? "cluster"}</span><h2>{selected.name}</h2><StatusBadge status={selected.state} /><dl><div><dt>Explanation</dt><dd>{issueLabel(selected)} · {selected.summary}</dd></div><div><dt>Mapped services</dt><dd>{selected.serviceIds.length > 0 ? selected.serviceIds.join(", ") : "No catalog mapping — correct catalog metadata to link this resource."}</dd></div><div><dt>Node</dt><dd>{selected.nodeName ?? "Not applicable"}</dd></div><div><dt>Restarts</dt><dd>{selected.restarts ?? "Not reported"}</dd></div><div><dt>Capacity</dt><dd>{selected.capacity ?? "Not reported"}</dd></div><div><dt>Source</dt><dd><a href={selected.sourceToolUrl} target="_blank" rel="noreferrer">{selected.sourceLabel} <ArrowUpRightIcon size={13} aria-hidden="true" /></a></dd></div></dl><h3>Recent Kubernetes events</h3>{selected.events.length === 0 ? <p className="empty-panel-copy">No recent events were returned for this object.</p> : <ul className="topology-events">{selected.events.map((event, index) => <li key={`${event.reason}:${index}`}><strong>{event.type} · {event.reason}</strong><span>{event.message}</span><time>{formattedTimestamp(event.observedAt)}</time></li>)}</ul>}</aside></div>}
     </>
   );
 }
@@ -410,10 +467,12 @@ export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: P
     return () => { active = false; };
   }, [provider, refreshKey, serviceId, snapshot.environment, timeRange]);
 
+  const correlationServiceId = serviceId === "all" ? snapshot.services[0]?.id : serviceId;
   const selectedInventory = useMemo(
-    () => snapshot.services.find((service) => service.id === (serviceId === "all" ? "cpq-demo" : serviceId)),
-    [serviceId, snapshot.services]
+    () => snapshot.services.find((service) => service.id === correlationServiceId),
+    [correlationServiceId, snapshot.services]
   );
+  const correlationServiceName = selectedInventory?.name ?? "Selected service";
   const action = (
     <label className="performance-service-control">
       <span>Service</span>
@@ -450,8 +509,8 @@ export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: P
             <PerformanceChartPanel title="Pod restarts" meta="Increase within each query interval" metrics={[metric(performance, "pod-restarts")].filter((item): item is PerformanceMetric => item !== undefined)} />
           </section>
           <article className="panel performance-correlation">
-            <PanelHeader title="CPQ Demo correlation" meta="Prometheus signals beside Sprint 2 workload evidence" />
-            {selectedInventory === undefined ? <p className="empty-panel-copy">CPQ Demo is outside the selected environment.</p> : (
+            <PanelHeader title={`${correlationServiceName} correlation`} meta="Prometheus signals beside live workload evidence" />
+            {selectedInventory === undefined ? <p className="empty-panel-copy">No service inventory is available in the selected environment.</p> : (
               <div className="correlation-grid">
                 <div><span>Inventory state</span><StatusBadge status={selectedInventory.state} /></div>
                 <div><span>Observed version</span><strong>{selectedInventory.version ?? "Unavailable"}</strong></div>
@@ -467,33 +526,79 @@ export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: P
 }
 
 export function IncidentsPage({ snapshot }: SnapshotPageProps): React.JSX.Element {
+  const [incidents, setIncidents] = useState<readonly IncidentSummary[]>(snapshot.incidents);
+  const [selectedId, setSelectedId] = useState<string>(snapshot.incidents[0]?.id ?? "");
+  const [runbookOpen, setRunbookOpen] = useState(false);
+  const [declareOpen, setDeclareOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [service, setService] = useState("");
+  const [severity, setSeverity] = useState<IncidentSummary["severity"]>("P2");
+  const selected = incidents.find((incident) => incident.id === selectedId) ?? incidents[0];
+
+  function acknowledgeSelected(): void {
+    if (selected === undefined) return;
+    setIncidents((current) => current.map((incident) => incident.id === selected.id
+      ? { ...incident, acknowledged: true, assignee: "J. Haynes" }
+      : incident));
+  }
+
+  function declareIncident(event: React.SyntheticEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const normalizedTitle = title.trim();
+    const normalizedService = service.trim();
+    if (normalizedTitle === "" || normalizedService === "") return;
+    const incident: IncidentSummary = {
+      id: `INC-SESSION-${String(incidents.length + 1).padStart(3, "0")}`,
+      title: normalizedTitle,
+      service: normalizedService,
+      severity,
+      status: "investigating",
+      startedAt: "Just now",
+      assignee: "J. Haynes",
+      acknowledged: false,
+      description: `Operator-declared investigation affecting ${normalizedService}.`,
+      owner: "Development Lab",
+      errorBudget: "Not assessed",
+      runbookSteps: ["Confirm the alert and affected service.", "Inspect current health, performance, and infrastructure evidence.", "Record findings before changing incident status."]
+    };
+    setIncidents((current) => [...current, incident]);
+    setSelectedId(incident.id);
+    setTitle("");
+    setService("");
+    setSeverity("P2");
+    setDeclareOpen(false);
+  }
+
   return (
     <>
-      <PageHeader eyebrow="Operations / Incidents" title="Incidents" description="Dependency-aware incident command with fixture responder and blast-radius data." action={<button className="primary-button" type="button">Declare incident</button>} />
+      <PageHeader eyebrow="Operations / Incidents" title="Incidents" description="Session-only incident workspace backed by the current monitoring snapshot; changes reset on reload." action={<button className="primary-button" type="button" onClick={() => setDeclareOpen(true)}>Declare incident</button>} />
       <section className="incident-command-grid">
         <article className="panel incident-queue">
-          <PanelHeader title="Active queue" meta={`${snapshot.incidents.length} incidents`} />
-          {snapshot.incidents.map((incident, index) => (
-            <button className={`incident-command-row ${index === 0 ? "selected" : ""}`} type="button" key={incident.id}>
+          <PanelHeader title="Active queue" meta={`${incidents.length} incidents`} />
+          {incidents.map((incident) => (
+            <button className={`incident-command-row ${incident.id === selected?.id ? "selected" : ""}`} type="button" key={incident.id} aria-pressed={incident.id === selected?.id} onClick={() => setSelectedId(incident.id)}>
               <span className={`severity severity-${incident.severity.toLowerCase()}`}>{incident.severity}</span>
               <span><strong>{incident.title}</strong><small>{incident.id} · {incident.service} · {incident.startedAt}</small></span>
               <span className="assignee">{incident.assignee}</span>
             </button>
           ))}
         </article>
-        <article className="panel incident-detail">
-          <span className="eyebrow">INC-2048 · Investigating</span>
-          <h2>OIDC token exchange latency above SLO</h2>
-          <p>Authentication requests are exceeding the 400 ms p95 threshold. CPQ Demo and CPQ Test are in the current blast radius.</p>
+        {selected === undefined ? <article className="panel incident-detail"><p className="empty-panel-copy">No incidents are active in this scope.</p></article> : <article className="panel incident-detail">
+          <span className="eyebrow">{selected.id} · {selected.status}</span>
+          <h2>{selected.title}</h2>
+          <p>{selected.description}</p>
           <div className="incident-detail-grid">
-            <div><span>Owner</span><strong>Identity Services</strong></div>
-            <div><span>Commander</span><strong>J. Haynes</strong></div>
-            <div><span>Started</span><strong>32 min ago</strong></div>
-            <div><span>Error budget</span><strong>3.7× burn</strong></div>
+            <div><span>Owner</span><strong>{selected.owner}</strong></div>
+            <div><span>Commander</span><strong>{selected.assignee}</strong></div>
+            <div><span>Started</span><strong>{selected.startedAt}</strong></div>
+            <div><span>Error budget</span><strong>{selected.errorBudget}</strong></div>
           </div>
-          <div className="incident-actions"><button className="primary-button" type="button">Acknowledge</button><button className="secondary-button" type="button">Open runbook</button></div>
-        </article>
+          {selected.acknowledged && <p className="incident-confirmation" role="status">Acknowledged by J. Haynes</p>}
+          <div className="incident-actions"><button className="primary-button" type="button" disabled={selected.acknowledged} onClick={acknowledgeSelected}>{selected.acknowledged ? "Acknowledged" : "Acknowledge"}</button><button className="secondary-button" type="button" onClick={() => setRunbookOpen(true)}>Open runbook</button></div>
+        </article>}
       </section>
+      {declareOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDeclareOpen(false)}><form className="operator-dialog" role="dialog" aria-modal="true" aria-label="Declare incident" onSubmit={declareIncident} onMouseDown={(event) => event.stopPropagation()}><h2>Declare incident</h2><p>This incident exists for this browser session only.</p><label><span>Incident title</span><input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label><span>Affected service</span><input required value={service} onChange={(event) => setService(event.target.value)} /></label><label><span>Severity</span><select value={severity} onChange={(event) => setSeverity(event.target.value as IncidentSummary["severity"])}><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option></select></label><div className="incident-actions"><button className="primary-button" type="submit">Create incident</button><button className="secondary-button" type="button" onClick={() => setDeclareOpen(false)}>Cancel</button></div></form></div>}
+      {runbookOpen && selected !== undefined && <div className="modal-backdrop" role="presentation" onMouseDown={() => setRunbookOpen(false)}><section className="operator-dialog" role="dialog" aria-modal="true" aria-label={`${selected.service} runbook`} onMouseDown={(event) => event.stopPropagation()}><span className="eyebrow">Runbook / {selected.service}</span><h2>{selected.title}</h2><ol>{selected.runbookSteps.map((step) => <li key={step}>{step}</li>)}</ol><button className="secondary-button" type="button" onClick={() => setRunbookOpen(false)}>Close runbook</button></section></div>}
     </>
   );
 }

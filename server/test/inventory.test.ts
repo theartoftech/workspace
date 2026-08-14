@@ -58,4 +58,14 @@ describe("inventory aggregation", () => {
     const aggregator = new InventoryAggregator(catalogFixture, [], () => new Date());
     await expect(aggregator.getInventory("production")).rejects.toThrow("Unsupported environment");
   });
+
+  it("filters Portfolio into its standalone environment", async () => {
+    const catalog = {
+      ...catalogFixture,
+      services: [{ ...catalogFixture.services[0]!, id: "portfolio", displayName: "Portfolio", environment: "portfolio" as const }]
+    };
+    const aggregator = new InventoryAggregator(catalog, [], () => new Date("2026-08-14T10:00:00Z"));
+    const snapshot = await aggregator.getInventory("portfolio");
+    expect(snapshot.services.map((service) => service.id)).toEqual(["portfolio"]);
+  });
 });

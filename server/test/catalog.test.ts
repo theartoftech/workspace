@@ -29,6 +29,7 @@ describe("inventory catalog adapter", () => {
       namespace: "public-site",
       name: "public-website"
     });
+    expect(catalog.services.find((service) => service.id === "portfolio")?.environment).toBe("portfolio");
   });
 
   it("rejects malformed and credential-bearing catalog records", () => {

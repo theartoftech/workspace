@@ -48,11 +48,15 @@ const primaryNavigation: readonly NavigationItem[] = [
 
 const liveProvider = createLiveMonitoringProvider();
 
-function CommandSearch({ onClose }: { readonly onClose: () => void }): React.JSX.Element {
+function CommandSearch({ onClose, services }: { readonly onClose: () => void; readonly services: OverviewSnapshot["services"] }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
-  const filtered = primaryNavigation.filter((item) => item.label.toLowerCase().includes(query.toLowerCase()));
+  const commandItems = useMemo<readonly NavigationItem[]>(() => [
+    ...primaryNavigation,
+    ...services.map((service) => ({ label: service.name, path: `/services/${encodeURIComponent(service.id)}`, icon: PulseIcon }))
+  ], [services]);
+  const filtered = commandItems.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -83,7 +87,7 @@ function CommandSearch({ onClose }: { readonly onClose: () => void }): React.JSX
               </button>
             );
           })}
-          {filtered.length === 0 && <p className="command-empty">No matching commands.</p>}
+          {filtered.length === 0 && <p className="command-empty">No matching pages or services.</p>}
         </div>
         <footer className="command-footer"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>esc</kbd> close</span></footer>
       </section>
@@ -218,7 +222,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
             <kbd><CommandIcon aria-hidden="true" size={12} /> K</kbd>
           </button>
           <div className="topbar-controls">
-            <label className="select-control"><span className="sr-only">Environment</span><select value={environment} onChange={(event) => setEnvironment(event.target.value as EnvironmentId)}><option value="all">All environments</option><option value="demo">Demo</option><option value="test">Test</option><option value="shared">Shared</option></select><CaretDownIcon aria-hidden="true" size={13} /></label>
+            <label className="select-control"><span className="sr-only">Environment</span><select value={environment} onChange={(event) => setEnvironment(event.target.value as EnvironmentId)}><option value="demo">Demo / Prod</option><option value="test">Test</option><option value="portfolio">Portfolio</option><option value="all">Shared (all)</option></select><CaretDownIcon aria-hidden="true" size={13} /></label>
             <label className="select-control time-control"><ClockIcon aria-hidden="true" size={15} /><span className="sr-only">Time range</span><select value={timeRange} onChange={(event) => setTimeRange(event.target.value as TimeRange)}><option value="15m">Last 15 min</option><option value="1h">Last 1 hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select><CaretDownIcon aria-hidden="true" size={13} /></label>
             <div className="refresh-control">
               <button className="icon-button" type="button" aria-label="Refresh monitoring data" onClick={refreshMonitoringData}><ArrowsClockwiseIcon aria-hidden="true" size={18} /></button>
@@ -230,7 +234,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
             </div>
             <div className="popover-anchor operator-anchor">
               <button className="operator-button" type="button" aria-label="Open operator menu" aria-expanded={operatorOpen} onClick={() => setOperatorOpen((value) => !value)}><span>JH</span><div><strong>J. Haynes</strong><small>Administrator</small></div><CaretDownIcon aria-hidden="true" size={13} /></button>
-              {operatorOpen && <div className="utility-popover operator-popover"><button type="button">Operator profile</button><button type="button">Keyboard shortcuts</button><button type="button">Sign out</button></div>}
+              {operatorOpen && <div className="utility-popover operator-popover"><button type="button">Operator profile</button><button type="button">Keyboard shortcuts</button><a href="/cdn-cgi/access/logout">Sign out</a></div>}
             </div>
           </div>
         </header>
@@ -239,8 +243,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
           <p>{snapshot?.mode === "fixture"
             ? "This test shell uses deterministic Sprint 1 data."
             : snapshot?.mode === "partial"
-              ? "Available sources stay live and unavailable sources are explicit. Performance uses Prometheus; infrastructure, incidents, and settings remain fixture previews."
-              : "Overview, deployments, service details, and performance use live read-only sources. Infrastructure, incidents, and settings remain fixture previews."}</p>
+              ? "Available sources stay live and unavailable sources are explicit. Incidents are session-only until the incident API sprint."
+              : "Overview, deployments, service details, performance, and infrastructure topology use live read-only sources. Incidents are session-only until the incident API sprint."}</p>
           <small>{snapshot ? `Snapshot ${new Date(snapshot.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading snapshot"}</small>
         </div>
         <main id="main-content" tabIndex={-1}>
@@ -249,7 +253,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
               <Route path="/" element={<OverviewPage snapshot={routeSnapshot} />} />
               <Route path="/services/:serviceId" element={<ServiceDetailPage snapshot={routeSnapshot} />} />
               <Route path="/deployments" element={<DeploymentsPage snapshot={routeSnapshot} />} />
-              <Route path="/infrastructure" element={<InfrastructurePage />} />
+              <Route path="/infrastructure" element={<InfrastructurePage snapshot={routeSnapshot} provider={provider} environment={environment} refreshKey={refreshKey} />} />
               <Route path="/performance" element={<PerformancePage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
               <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} />} />
               <Route path="/settings" element={<SettingsPage />} />
@@ -258,7 +262,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
           ) : <LoadingShell />}
         </main>
       </div>
-      {commandOpen && <CommandSearch onClose={() => setCommandOpen(false)} />}
+      {commandOpen && <CommandSearch onClose={() => setCommandOpen(false)} services={snapshot?.services ?? []} />}
     </div>
   );
 }

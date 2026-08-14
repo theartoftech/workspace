@@ -8,8 +8,8 @@ describe("fixture monitoring provider", () => {
     const snapshot = await provider.getOverview("all", "1h");
 
     expect(snapshot.mode).toBe("fixture");
-    expect(snapshot.services).toHaveLength(5);
-    expect(snapshot.summary.total).toBe(5);
+    expect(snapshot.services).toHaveLength(6);
+    expect(snapshot.summary.total).toBe(6);
     expect(snapshot.generatedAt).toMatch(/^2026-/);
   });
 
@@ -28,6 +28,12 @@ describe("fixture monitoring provider", () => {
     expect(performance.metrics.map((metric) => metric.id)).toContain("request-rate");
     expect(performance.metrics.map((metric) => metric.id)).toContain("request-total");
     expect(performance.source.name).toBe("prometheus");
+  });
+
+  it("provides deterministic searchable topology for UI tests", async () => {
+    const topology = await createFixtureMonitoringProvider().getTopology?.("demo");
+    expect(topology?.environment).toBe("demo");
+    expect(topology?.resources).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "Deployment", serviceIds: ["cpq-demo"] })]));
   });
 
   it("throws an explicit error for an unsupported environment", async () => {
@@ -107,5 +113,20 @@ describe("fixture monitoring provider", () => {
     });
 
     await expect(provider.getPerformance("all", "all", "1h")).rejects.toThrow("Performance API returned a malformed response");
+  });
+
+  it("loads and validates topology without accepting arbitrary query input", async () => {
+    const fetchImpl = vi.fn((): Promise<Response> => Promise.resolve(new Response(JSON.stringify({
+      apiVersion: 1, mode: "live", assembledAt: "2026-08-14T10:00:00Z", environment: "demo", namespaces: ["default"], truncated: false,
+      resources: [{ id: "Node::lab", kind: "Node", namespace: null, name: "lab", state: "healthy", summary: "Ready", issueCode: null, serviceIds: [], nodeName: null, restarts: null, capacity: null, sourceLabel: "Kubernetes", sourceToolUrl: "/tools/kubernetes/cluster/node/lab", events: [] }],
+      edges: [], source: { name: "kubernetes", availability: "available", message: null }
+    }), { status: 200 })));
+    const provider = createLiveMonitoringProvider({ fetchImpl, timeoutMs: 1000 });
+    const topology = await provider.getTopology?.("demo");
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/topology?environment=demo", expect.objectContaining({ method: "GET" }));
+    expect(topology?.resources[0]).toMatchObject({ kind: "Node", name: "lab" });
+
+    const malformed = createLiveMonitoringProvider({ fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ apiVersion: 1 }), { status: 200 })), timeoutMs: 1000 });
+    await expect(malformed.getTopology?.("demo")).rejects.toThrow("Topology API returned a malformed response");
   });
 });

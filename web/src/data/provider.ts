@@ -1,9 +1,10 @@
 import type { HealthState, InventorySnapshot, ServiceInventory } from "../../../shared/inventory";
 import type { PerformanceMetric, PerformanceMetricId, PerformanceSnapshot, PerformanceUnit } from "../../../shared/performance";
+import type { TopologyEdge, TopologyResource, TopologyResourceKind, TopologySnapshot } from "../../../shared/topology";
 import { incidentFixtures, serviceFixtures, trafficFixtures } from "./fixtures";
 import type { EnvironmentId, MonitoringProvider, OverviewSnapshot, TimeRange } from "./types";
 
-const environments = new Set<EnvironmentId>(["all", "demo", "test", "shared"]);
+const environments = new Set<EnvironmentId>(["all", "demo", "test", "portfolio", "shared"]);
 const timeRanges = new Set<TimeRange>(["15m", "1h", "6h", "24h"]);
 const healthStates = new Set<HealthState>(["healthy", "degraded", "failing", "unknown", "paused", "stale"]);
 const performanceMetricIds = new Set<PerformanceMetricId>([
@@ -11,6 +12,7 @@ const performanceMetricIds = new Set<PerformanceMetricId>([
   "system-cpu", "jvm-heap", "host-memory", "db-pool-saturation", "pod-restarts"
 ]);
 const performanceUnits = new Set<PerformanceUnit>(["requests/s", "requests", "percent", "milliseconds", "restarts"]);
+const topologyKinds = new Set<TopologyResourceKind>(["Node", "Namespace", "Deployment", "StatefulSet", "Pod", "Service", "PersistentVolumeClaim", "Ingress"]);
 
 function validateFilters(environment: EnvironmentId, timeRange: TimeRange): void {
   if (!environments.has(environment)) throw new Error(`Unsupported environment: ${environment}`);
@@ -41,7 +43,7 @@ function isService(value: unknown): value is ServiceInventory {
     && typeof raw.id === "string"
     && typeof raw.name === "string"
     && ["application", "identity", "mail", "erp"].includes(String(raw.kind))
-    && ["demo", "test", "shared"].includes(String(raw.environment))
+    && ["demo", "test", "portfolio", "shared"].includes(String(raw.environment))
     && typeof raw.owner === "string"
     && healthStates.has(raw.state as HealthState)
     && (typeof raw.lastCheckedAt === "string" || raw.lastCheckedAt === null)
@@ -123,6 +125,54 @@ function parsePerformance(value: unknown): PerformanceSnapshot {
   return value as PerformanceSnapshot;
 }
 
+function isTopologyResource(value: unknown): value is TopologyResource {
+  const raw = record(value);
+  return raw !== null
+    && typeof raw.id === "string"
+    && topologyKinds.has(raw.kind as TopologyResourceKind)
+    && (typeof raw.namespace === "string" || raw.namespace === null)
+    && typeof raw.name === "string"
+    && healthStates.has(raw.state as HealthState)
+    && typeof raw.summary === "string"
+    && (typeof raw.issueCode === "string" || raw.issueCode === null)
+    && Array.isArray(raw.serviceIds)
+    && raw.serviceIds.every((id) => typeof id === "string")
+    && (typeof raw.nodeName === "string" || raw.nodeName === null)
+    && (typeof raw.restarts === "number" || raw.restarts === null)
+    && (typeof raw.capacity === "string" || raw.capacity === null)
+    && (raw.sourceLabel === "Kubernetes" || raw.sourceLabel === "Catalog")
+    && typeof raw.sourceToolUrl === "string"
+    && Array.isArray(raw.events);
+}
+
+function parseTopology(value: unknown): TopologySnapshot {
+  const raw = record(value); const source = record(raw?.source);
+  if (raw === null || raw.apiVersion !== 1 || !["live", "partial"].includes(String(raw.mode))
+    || typeof raw.assembledAt !== "string" || !environments.has(raw.environment as EnvironmentId)
+    || !Array.isArray(raw.namespaces) || !raw.namespaces.every((item) => typeof item === "string")
+    || typeof raw.truncated !== "boolean" || !Array.isArray(raw.resources) || !raw.resources.every(isTopologyResource)
+    || !Array.isArray(raw.edges) || source === null || source.name !== "kubernetes"
+    || !["available", "unavailable"].includes(String(source.availability))
+    || !(source.message === null || typeof source.message === "string")) throw new Error("Topology API returned a malformed response");
+  return value as TopologySnapshot;
+}
+
+function fixtureTopology(environment: EnvironmentId): TopologySnapshot {
+  const services = environment === "all" ? serviceFixtures : serviceFixtures.filter((service) => service.environment === environment);
+  const resources: TopologyResource[] = services.map((service, index) => ({
+    id: `Deployment:${service.environment}:${service.id}`, kind: "Deployment", namespace: service.environment, name: service.id,
+    state: service.state, summary: service.state === "healthy" ? "1/1 replicas ready" : "0/1 replicas ready",
+    issueCode: service.state === "healthy" ? null : "pending", serviceIds: [service.id], nodeName: null, restarts: index === 1 ? 2 : 0,
+    capacity: null, sourceLabel: "Kubernetes", sourceToolUrl: `/tools/kubernetes/namespaces/${service.environment}/deployment/${service.id}`, events: []
+  }));
+  const edges: TopologyEdge[] = services.flatMap((service) => [
+    { from: `service:${service.id}`, to: `Deployment:${service.environment}:${service.id}`, relation: "runs-as" as const },
+    { from: "platform:prometheus", to: `service:${service.id}`, relation: "observes" as const }
+  ]);
+  if (services.some((service) => service.id === "cpq-demo") && services.some((service) => service.id === "mailpit")) edges.push({ from: "service:cpq-demo", to: "service:mailpit", relation: "depends-on" });
+  return { apiVersion: 1, mode: "live", assembledAt: "2026-08-14T10:00:00Z", environment, namespaces: [...new Set(resources.map((resource) => resource.namespace).filter((item): item is string => item !== null))], truncated: false, resources, edges, source: { name: "kubernetes", availability: "available", message: null } };
+}
+
 function fixturePerformance(environment: EnvironmentId, serviceId: string, range: TimeRange): PerformanceSnapshot {
   const points = trafficFixtures.map((point, index) => ({
     timestamp: new Date(Date.parse("2026-08-12T14:20:00Z") + index * 300_000).toISOString(),
@@ -182,6 +232,9 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
         validateFilters(environment, timeRange);
         return fixturePerformance(environment, serviceId, timeRange);
       });
+    },
+    getTopology(environment: EnvironmentId): Promise<TopologySnapshot> {
+      return Promise.resolve().then(() => { if (!environments.has(environment)) throw new Error(`Unsupported environment: ${environment}`); return fixtureTopology(environment); });
     }
   };
 }
@@ -236,6 +289,10 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
       validateFilters(environment, timeRange);
       const path = `/api/v1/performance?environment=${encodeURIComponent(environment)}&service=${encodeURIComponent(serviceId)}&range=${encodeURIComponent(timeRange)}`;
       return parsePerformance(await fetchJson(path, "Performance API"));
+    },
+    async getTopology(environment: EnvironmentId): Promise<TopologySnapshot> {
+      if (!environments.has(environment)) throw new Error(`Unsupported environment: ${environment}`);
+      return parseTopology(await fetchJson(`/api/v1/topology?environment=${encodeURIComponent(environment)}`, "Topology API"));
     }
   };
 }

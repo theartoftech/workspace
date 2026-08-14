@@ -39,7 +39,7 @@ const rangeDefinitions: Readonly<Record<PerformanceRange, RangeDefinition>> = {
   "6h": { seconds: 21_600, stepSeconds: 300, rateWindow: "5m" },
   "24h": { seconds: 86_400, stepSeconds: 900, rateWindow: "15m" }
 };
-const environments = new Set<InventoryEnvironment>(["all", "demo", "test", "shared"]);
+const environments = new Set<InventoryEnvironment>(["all", "demo", "test", "portfolio", "shared"]);
 
 export class PerformanceRequestError extends Error {
   constructor(message: string) {

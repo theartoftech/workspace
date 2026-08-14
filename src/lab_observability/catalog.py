@@ -30,6 +30,7 @@ class ServiceKind(StrEnum):
 class Environment(StrEnum):
     DEMO = "demo"
     TEST = "test"
+    PORTFOLIO = "portfolio"
     SHARED = "shared"
 
 
