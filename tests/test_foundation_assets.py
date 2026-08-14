@@ -89,6 +89,8 @@ class InventoryReaderRbacTests(unittest.TestCase):
         self.assertIn('resourceNames: ["default", "cpq-test", "public-site"]', manifest)
         for resource in ("statefulsets", "services", "persistentvolumeclaims", "events", "ingresses", "nodes", "namespaces"):
             self.assertIn(resource, manifest)
+        self.assertIn('resources: ["pods/log"]', manifest)
+        self.assertRegex(manifest, r'resources: \["pods/log"\]\s+verbs: \["get"\]')
         self.assertEqual(manifest.count("kind: RoleBinding"), 3)
         self.assertIn("namespace: default", manifest)
         self.assertIn("namespace: cpq-test", manifest)

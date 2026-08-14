@@ -1,6 +1,6 @@
 # Portal and operations API deployment and rollback runbook
 
-This runbook covers the lab portal and matching operations API. Monitoring evidence routes remain read-only; Sprint 5 adds bounded incident command routes. The runbook does not delete containers, images, volumes, incident history, monitoring data, or credentials. Cloudflare tunnel and Access changes remain user-managed and are never performed by repository scripts.
+This runbook covers the lab portal and matching operations API. Monitoring evidence routes, including Sprint 6 log correlation, remain read-only; Sprint 5 adds bounded incident command routes. The runbook does not delete containers, images, volumes, incident history, monitoring data, or credentials. Cloudflare tunnel and Access changes remain user-managed and are never performed by repository scripts.
 
 ## Record before deployment
 

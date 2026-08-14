@@ -34,7 +34,7 @@
 | 3 | Traffic and performance | Complete, deployed, and user-verified | Inspect real request rate, errors, saturation, and latency graphs |
 | 4 | Infrastructure topology | Complete, deployed, and user-verified | Drill from an environment into workloads, nodes, and dependencies |
 | 5 | Alerts and incident operations | Complete, deployed, and user-verified | Persist, triage, acknowledge, silence, declare, and resolve alert-driven incidents |
-| 6 | Logs and event correlation | Planned | Move from a failed service to relevant logs and Kubernetes events |
+| 6 | Logs and event correlation | Implemented and locally verified; deployment pending | Move from a failed service to relevant logs and Kubernetes events |
 | 7 | Enterprise identity and access | Planned | Sign in through OIDC and verify role-scoped actions and audit records |
 | 8 | Safe synthetic journeys | Planned | Run non-destructive CPQ/OAuth/Mailpit/ERPNet journeys and see step diagnostics |
 | 9 | Cloud-ready operations | Planned | Install, upgrade, back up, restore, and roll back in an isolated target |
@@ -343,6 +343,10 @@ Provide a focused operational workflow for active problems without becoming a fu
 
 ## Sprint 6: Logs and event correlation
 
+### Status
+
+Implemented and automatically verified locally on 2026-08-14. Deployment and human acceptance remain pending. Before deployment, the reviewed `pods/log` subresource rule must be applied separately to the existing namespace-bounded service account; the deployment script does not apply or change RBAC.
+
 ### Objective
 
 Add bounded log search and correlate application, probe, and Kubernetes evidence around a failure.
@@ -355,6 +359,16 @@ Add bounded log search and correlate application, probe, and Kubernetes evidence
 - Kubernetes event stream and links from metrics/alerts into the relevant time window.
 - Downloadable redacted diagnostic bundle.
 
+### Implemented architecture
+
+- Uses the Kubernetes Pod Log API as the bounded lab source; no durable log aggregation or retention backend is implied.
+- Resolves catalog `Deployment` mappings to pods through server-read selectors and resolves catalog `Pod` mappings by exact name. The browser cannot select namespaces, arbitrary resource paths, label selectors, or Kubernetes query parameters.
+- Restricts windows to 15 minutes, 1 hour, 6 hours, or 24 hours; caps pods at 8, current/previous container streams at 16, returned lines at 500, relevant events at 5 per object and 50 overall, each upstream log body at 64 KiB, and Kubernetes concurrency at 4 by default.
+- Retrieves previous logs only for containers with observed restarts. One stream or event-source failure produces an explicit partial result and omission instead of erasing successful evidence.
+- Redacts credential URLs, bearer values, sensitive headers, common key/value secrets, and common JSON secret fields before the browser response or diagnostic export is assembled.
+- Links service details, performance correlation, and selected incidents to `/logs` while preserving the selected global range in the URL.
+- Generates diagnostic JSON only from a server response that declares redaction. The bundle retains sources, omissions, filters-applied flags, caps, and truncation metadata.
+
 ### Acceptance criteria
 
 - An operator can move from a failed health probe to relevant logs without rebuilding the time filter.
@@ -362,6 +376,23 @@ Add bounded log search and correlate application, probe, and Kubernetes evidence
 - Secret and token patterns are redacted before UI display or export.
 - Log-backend failure does not break health and metrics screens.
 - Diagnostic bundles declare included sources, omissions, and redactions.
+
+### Failure modes to test
+
+- The Kubernetes token is missing, empty, expired, or lacks `pods/log` while ordinary inventory and events remain readable.
+- A Deployment selector is missing or malformed, maps no current pods, or maps more pods than the server cap.
+- A pod has multiple containers, a restarted container has no previous log, or one container returns unauthorized, timeout, oversized, or malformed text.
+- Log lines omit timestamps, use nanosecond timestamps, exceed the per-line display bound, contain JSON secrets, or contain credentials in headers, URLs, and key/value forms.
+- Search text, correlation IDs, pod names, environment/service relationships, ranges, severities, duplicate parameters, and unsupported parameters are invalid or oversized.
+- Events are missing timestamps, outside the selected window, unrelated to the mapped workload, over the event cap, or unavailable while log streams remain valid.
+- A result contains zero matching lines because of filters; the UI must distinguish that from an unavailable source and never display missing evidence as zero activity.
+- Browser diagnostic export is unavailable or receives evidence without the required redaction declaration.
+
+### Non-goals
+
+- Durable, multi-node log aggregation, indexing, retention, backup, or deleted-pod history.
+- Arbitrary Kubernetes log access, shell access, exec, attach, watch, mutation, or cluster-wide namespace enumeration.
+- Notification destinations, notification credentials, OIDC identity, or application RBAC.
 
 ## Sprint 7: Enterprise identity and access
 

@@ -70,9 +70,9 @@ The deploy action creates `${MONITORING_DATA_DIR}/incidents` with group-write ac
 
 ### Required live Kubernetes evidence
 
-The portal can still explain partial data without Kubernetes credentials, but Sprint 4 deployment preflight and verification now require live Kubernetes evidence. First review `deploy/kubernetes/inventory-reader-rbac.yaml`. It grants `get`/`list` only for topology resources inside the catalog namespaces `default`, `cpq-test`, and `public-site`; namespace reads are name-restricted, and cluster scope is limited to read-only node inventory. Mutation and watch permissions are deliberately absent.
+The portal can still explain partial data without Kubernetes credentials, but deployment verification requires live topology and Sprint 6 log evidence. First review `deploy/kubernetes/inventory-reader-rbac.yaml`. It grants `get`/`list` only for topology resources inside the catalog namespaces `default`, `cpq-test`, and `public-site`, plus `get` only on the `pods/log` subresource in those same namespaces. Namespace reads are name-restricted, and cluster scope is limited to read-only node inventory. Mutation, pod exec/attach, and watch permissions are deliberately absent.
 
-Applying RBAC is a separate, explicit cluster mutation and is not performed by the deployment script. Apply the reviewed manifest from the workspace before deploying the monitoring release, because the deployment verifier now requires live topology:
+Applying RBAC is a separate, explicit cluster mutation and is not performed by the deployment script. Apply the reviewed manifest from the workspace before deploying the monitoring release, because the deployment verifier requires live topology and log evidence:
 
 ```sh
 scp deploy/kubernetes/inventory-reader-rbac.yaml \
@@ -85,9 +85,11 @@ ssh -t jhaynes@192.168.86.246 \
   'sudo k3s kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory list deployments -n default'
 ssh -t jhaynes@192.168.86.246 \
   'sudo k3s kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory list nodes'
+ssh -t jhaynes@192.168.86.246 \
+  'sudo k3s kubectl auth can-i --as=system:serviceaccount:monitoring:workspace-monitor-inventory get pods/log -n default'
 ```
 
-Both authorization checks must return `yes`. Mutation checks such as `create`, `update`, `patch`, and `delete` must remain `no`. Issue a bounded token and install it so only the inventory container UID can read it:
+All three authorization checks must return `yes`. Mutation checks such as `create`, `update`, `patch`, and `delete`, and access checks for `pods/exec` and `pods/attach`, must remain `no`. Issue a bounded token and install it so only the inventory container UID can read it:
 
 ```sh
 ssh -t jhaynes@192.168.86.246 \
@@ -137,7 +139,7 @@ Before Sprint 1.1 cutover, the user-managed tunnel continues to route `monitor.j
 The implemented deployment and operator-controlled cutover sequence is intentionally reversible:
 
 1. Deploy the portal and inventory API containers without changing Cloudflare.
-2. Verify `/healthz`, `/api/v1/inventory`, `/api/v1/incidents`, all primary routes, live/partial disclosure, resource limits, and existing Grafana/monitoring health over loopback.
+2. Verify `/healthz`, `/api/v1/inventory`, `/api/v1/incidents`, `/api/v1/logs`, all primary routes, source/redaction disclosure, resource limits, and existing Grafana/monitoring health over loopback.
 3. Confirm that the Cloudflare Access policy is active for `monitor.jefferyhaynes.net`.
 4. Change the user-managed tunnel origin from `http://localhost:3000` to `http://localhost:3100`.
 5. Verify public TLS, Access enforcement, and portal navigation.

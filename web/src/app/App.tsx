@@ -13,6 +13,7 @@ import {
   PulseIcon,
   SquaresFourIcon,
   StackIcon,
+  TerminalWindowIcon,
   WarningOctagonIcon,
   XIcon
 } from "@phosphor-icons/react";
@@ -25,6 +26,7 @@ import {
   DeploymentsPage,
   IncidentsPage,
   InfrastructurePage,
+  LogsPage,
   OverviewPage,
   PerformancePage,
   ServiceDetailPage,
@@ -43,6 +45,7 @@ const primaryNavigation: readonly NavigationItem[] = [
   { label: "Infrastructure", path: "/infrastructure", icon: HardDrivesIcon },
   { label: "Performance", path: "/performance", icon: ChartLineUpIcon },
   { label: "Incidents", path: "/incidents", icon: WarningOctagonIcon },
+  { label: "Logs", path: "/logs", icon: TerminalWindowIcon },
   { label: "Settings", path: "/settings", icon: GearIcon }
 ];
 
@@ -111,7 +114,7 @@ function Sidebar({ open, onClose, snapshot, activeIncidentCount }: { readonly op
       </div>
       <nav className="primary-nav">
         <span className="nav-section-label">OPERATIONS</span>
-        {primaryNavigation.slice(0, 5).map((item) => {
+        {primaryNavigation.slice(0, 6).map((item) => {
           const Icon = item.icon;
           return (
             <NavLink key={item.path} to={item.path} end={item.path === "/"} aria-label={item.label} onClick={onClose}>
@@ -120,7 +123,7 @@ function Sidebar({ open, onClose, snapshot, activeIncidentCount }: { readonly op
           );
         })}
         <span className="nav-section-label governance-label">GOVERNANCE</span>
-        {primaryNavigation.slice(5).map((item) => {
+        {primaryNavigation.slice(6).map((item) => {
           const Icon = item.icon;
           return <NavLink key={item.path} to={item.path} aria-label={item.label} onClick={onClose}>{({ isActive }) => <><Icon aria-hidden={true} size={19} weight={isActive ? "fill" : "regular"} /><span>{item.label}</span></>}</NavLink>;
         })}
@@ -148,8 +151,13 @@ function ErrorShell({ message }: { readonly message: string }): React.JSX.Elemen
 }
 
 export function App({ provider = liveProvider }: { readonly provider?: MonitoringProvider }): React.JSX.Element {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [environment, setEnvironment] = useState<EnvironmentId>("all");
-  const [timeRange, setTimeRange] = useState<TimeRange>("1h");
+  const [timeRange, setTimeRange] = useState<TimeRange>(() => {
+    const requested = new URLSearchParams(location.search).get("range");
+    return requested === "15m" || requested === "1h" || requested === "6h" || requested === "24h" ? requested : "1h";
+  });
   const [snapshot, setSnapshot] = useState<OverviewSnapshot | null>(null);
   const [activeIncidents, setActiveIncidents] = useState<IncidentListResponse | null>(null);
   const [incidentError, setIncidentError] = useState<string | null>(null);
@@ -161,8 +169,6 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
   const [refreshKey, setRefreshKey] = useState(0);
   const [incidentRefreshKey, setIncidentRefreshKey] = useState(0);
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
-  const location = useLocation();
-  const navigate = useNavigate();
 
   useEffect(() => {
     let active = true;
@@ -265,18 +271,19 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
             ? "This test shell uses deterministic Sprint 1 data."
             : snapshot?.mode === "partial"
               ? "Available sources stay live and unavailable sources are explicit. Persistent incidents retain their independent source status."
-              : "Inventory, performance, topology, and persistent incident operations use live server APIs."}</p>
+              : "Inventory, performance, topology, persistent incidents, and redacted log correlation use live server APIs."}</p>
           <small>{snapshot ? `Snapshot ${new Date(snapshot.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading snapshot"}</small>
         </div>
         <main id="main-content" tabIndex={-1}>
           {error ? <ErrorShell message={error} /> : routeSnapshot ? (
             <Routes>
               <Route path="/" element={<OverviewPage snapshot={routeSnapshot} />} />
-              <Route path="/services/:serviceId" element={<ServiceDetailPage snapshot={routeSnapshot} />} />
+              <Route path="/services/:serviceId" element={<ServiceDetailPage snapshot={routeSnapshot} timeRange={timeRange} />} />
               <Route path="/deployments" element={<DeploymentsPage snapshot={routeSnapshot} />} />
               <Route path="/infrastructure" element={<InfrastructurePage snapshot={routeSnapshot} provider={provider} environment={environment} refreshKey={refreshKey} />} />
               <Route path="/performance" element={<PerformancePage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
-              <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} provider={provider} environment={environment} refreshKey={incidentRefreshKey} onMutated={() => setIncidentRefreshKey((value) => value + 1)} />} />
+              <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} provider={provider} environment={environment} timeRange={timeRange} refreshKey={incidentRefreshKey} onMutated={() => setIncidentRefreshKey((value) => value + 1)} />} />
+              <Route path="/logs" element={<LogsPage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<ErrorShell message="The requested monitoring route does not exist." />} />
             </Routes>

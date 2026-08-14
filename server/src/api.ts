@@ -2,8 +2,10 @@ import { createServer, type Server } from "node:http";
 
 import type { InventoryEnvironment, InventorySnapshot, ServiceDetailResponse } from "../../shared/inventory";
 import type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListResponse, IncidentTransitionCommand } from "../../shared/incidents";
+import type { LogQuery } from "../../shared/logs";
 import type { PerformanceRange, PerformanceSnapshot } from "../../shared/performance";
 import { IncidentRequestError } from "./incidents";
+import { LogRequestError, type LogReader } from "./logs";
 import { PerformanceRequestError } from "./prometheus";
 import type { TopologyReader } from "./topology";
 
@@ -40,6 +42,9 @@ const environments = new Set<InventoryEnvironment>(["all", "demo", "test", "port
 const performanceRanges = new Set<PerformanceRange>(["15m", "1h", "6h", "24h"]);
 const performanceParameters = new Set(["environment", "service", "range"]);
 const topologyParameters = new Set(["environment"]);
+const logParameters = new Set(["environment", "service", "range", "pod", "severity", "query", "correlationId"]);
+const logEnvironments = new Set(["all", "demo", "test", "portfolio"]);
+const logSeverities = new Set(["all", "error", "warning", "info", "debug", "unknown"]);
 const incidentParameters = new Set(["environment", "status"]);
 const incidentEnvironments = new Set(["all", "demo", "test", "portfolio"]);
 const incidentStatusFilters = new Set(["active", "resolved", "all"]);
@@ -173,7 +178,7 @@ async function handleIncidentRequest(request: Request, operations: IncidentOpera
   }
 }
 
-export async function handleInventoryRequest(request: Request, reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: IncidentOperations): Promise<Response> {
+export async function handleInventoryRequest(request: Request, reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: IncidentOperations, logReader?: LogReader): Promise<Response> {
   const headOnly = request.method === "HEAD";
   const url = new URL(request.url);
   const incidentResponse = await handleIncidentRequest(request, incidentOperations, url, headOnly);
@@ -218,6 +223,35 @@ export async function handleInventoryRequest(request: Request, reader: Inventory
     }
   }
 
+  if (url.pathname === "/api/v1/logs") {
+    if (logReader === undefined) return jsonResponse(503, errorBody("logs_unavailable", "Log and event correlation is not configured."), headOnly);
+    const unexpected = [...url.searchParams.keys()].find((parameter) => !logParameters.has(parameter));
+    if (unexpected !== undefined) return jsonResponse(400, errorBody("invalid_parameter", `Unsupported log parameter: ${unexpected}`), headOnly);
+    const duplicate = [...logParameters].find((parameter) => url.searchParams.getAll(parameter).length > 1);
+    if (duplicate !== undefined) return jsonResponse(400, errorBody("invalid_parameter", `Log parameter must not be repeated: ${duplicate}`), headOnly);
+    const environment = url.searchParams.get("environment") ?? "all";
+    const serviceId = url.searchParams.get("service") ?? "";
+    const range = url.searchParams.get("range") ?? "1h";
+    const pod = url.searchParams.get("pod");
+    const severity = url.searchParams.get("severity") ?? "all";
+    const textQuery = url.searchParams.get("query") ?? "";
+    const correlationId = url.searchParams.get("correlationId") ?? "";
+    if (!logEnvironments.has(environment)) return jsonResponse(400, errorBody("invalid_environment", `Unsupported environment: ${environment}`), headOnly);
+    if (serviceId === "") return jsonResponse(400, errorBody("invalid_log_filter", "A service parameter is required."), headOnly);
+    if (!performanceRanges.has(range as PerformanceRange)) return jsonResponse(400, errorBody("invalid_range", `Unsupported log range: ${range}`), headOnly);
+    if (!logSeverities.has(severity)) return jsonResponse(400, errorBody("invalid_log_filter", `Unsupported log severity: ${severity}`), headOnly);
+    const query: LogQuery = {
+      environment: environment as LogQuery["environment"], serviceId, range: range as LogQuery["range"], pod,
+      severity: severity as LogQuery["severity"], query: textQuery, correlationId
+    };
+    try {
+      return jsonResponse(200, await logReader.getLogs(query), headOnly);
+    } catch (cause: unknown) {
+      if (cause instanceof LogRequestError) return jsonResponse(400, errorBody("invalid_log_filter", cause.message), headOnly);
+      return jsonResponse(500, errorBody("logs_unavailable", "Log correlation could not be assembled."), headOnly);
+    }
+  }
+
   try {
     if (url.pathname === "/api/v1/inventory") {
       const environment = url.searchParams.get("environment") ?? "all";
@@ -250,7 +284,7 @@ export async function handleInventoryRequest(request: Request, reader: Inventory
   return jsonResponse(404, errorBody("not_found", "The requested API route does not exist."), headOnly);
 }
 
-export function createInventoryHttpServer(reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: IncidentOperations): Server {
+export function createInventoryHttpServer(reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: IncidentOperations, logReader?: LogReader): Server {
   return createServer((incoming, outgoing) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -271,7 +305,7 @@ export function createInventoryHttpServer(reader: InventoryReader, performanceRe
       });
       const responsePromise = oversized
         ? Promise.resolve(jsonResponse(413, errorBody("incident_command_too_large", "Incident command exceeds the 16384-byte limit."), false))
-        : handleInventoryRequest(request, reader, performanceReader, topologyReader, incidentOperations);
+        : handleInventoryRequest(request, reader, performanceReader, topologyReader, incidentOperations, logReader);
       void responsePromise.then(async (response) => {
         outgoing.statusCode = response.status;
         response.headers.forEach((value, key) => outgoing.setHeader(key, value));

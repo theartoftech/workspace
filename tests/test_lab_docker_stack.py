@@ -531,7 +531,7 @@ exit 1
         self.assertIn("compose build --pull inventory-api portal", source)
         self.assertNotIn("compose pull\n", source)
         self.assertIn('verify_http "Portal health" http://127.0.0.1:3100/healthz', source)
-        for route in ("/", "/deployments", "/infrastructure", "/performance", "/incidents", "/settings"):
+        for route in ("/", "/deployments", "/infrastructure", "/performance", "/incidents", "/logs", "/settings"):
             self.assertIn(f'"{route}"', source)
         self.assertIn("/api/v1/inventory?environment=all", source)
         self.assertIn("/api/v1/performance?environment=demo&service=cpq-demo&range=1h", source)
@@ -540,6 +540,9 @@ exit 1
         self.assertIn("kubernetes_inventory_token", source)
         self.assertIn("/api/v1/topology?environment=all", source)
         self.assertIn("/api/v1/incidents?environment=all&status=active", source)
+        self.assertIn("/api/v1/logs?environment=demo&service=cpq-demo&range=1h", source)
+        self.assertIn('"name":"kubernetes-pod-logs","availability":"available"', source)
+        self.assertIn('"applied":true', source)
         self.assertIn('"state":"unconfigured"', source)
         self.assertIn('"apiVersion":1', source)
         self.assertIn('"serviceId":"cpq-demo"', source)
@@ -550,6 +553,7 @@ exit 1
         self.assertIn("Live inventory", source)
         self.assertIn("Prometheus telemetry", source)
         self.assertIn("Kubernetes inventory", source)
+        self.assertIn("Logs & events", source)
         self.assertIn("validate_portal_port", source)
 
     def test_deploy_prepares_bounded_persistent_incident_storage(self) -> None:
@@ -630,8 +634,10 @@ elif [[ " $* " == *"/api/v1/performance?environment=portfolio&service=portfolio&
     printf '{"apiVersion":1,"serviceId":"portfolio","metrics":[{"id":"request-total","status":"ok"}]}'
 elif [[ " $* " == *"/api/v1/incidents?environment=all&status=active"* ]]; then
     printf '{"apiVersion":1,"alertSource":{"name":"inventory-health-evaluator"},"notification":{"state":"unconfigured"}}'
+elif [[ " $* " == *"/api/v1/logs?environment=demo&service=cpq-demo&range=1h"* ]]; then
+    printf '{"apiVersion":1,"service":{"id":"cpq-demo"},"sources":[{"name":"kubernetes-pod-logs","availability":"available"},{"name":"kubernetes-events","availability":"available"}],"redaction":{"applied":true}}'
 elif [[ " $* " == *" http://127.0.0.1:3100/assets/"* ]]; then
-    printf 'Live inventory Prometheus telemetry Kubernetes inventory'
+    printf 'Live inventory Prometheus telemetry Kubernetes inventory Logs & events Server-side redaction applied'
 elif [[ " $* " == *" http://127.0.0.1:3100/"* && " $* " != *"/healthz"* ]]; then
     printf '<title>Workspace Monitor</title><script src="/assets/index-test.js"></script>'
 fi

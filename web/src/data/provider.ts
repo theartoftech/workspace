@@ -1,4 +1,5 @@
 import type { HealthState, InventorySnapshot, ServiceInventory } from "../../../shared/inventory";
+import type { CorrelatedKubernetesEvent, LogCorrelationSnapshot, LogEntry, LogOmission, LogPod, LogQuery, LogSourceStatus } from "../../../shared/logs";
 import type {
   DeclareIncidentCommand,
   IncidentAuditAction,
@@ -30,6 +31,9 @@ const incidentSeverities = new Set<IncidentSeverity>(["P1", "P2", "P3"]);
 const incidentStatuses = new Set<IncidentStatus>(["active", "resolved"]);
 const incidentStatusFilters = new Set<IncidentStatusFilter>(["active", "resolved", "all"]);
 const incidentAuditActions = new Set<IncidentAuditAction>(["created", "acknowledged", "declared", "silenced", "silence_expired", "resolved", "reopened", "alert_recurred", "alert_updated", "condition_recovered"]);
+const logEnvironments = new Set<EnvironmentId>(["all", "demo", "test", "portfolio"]);
+const logSeverities = new Set(["all", "error", "warning", "info", "debug", "unknown"]);
+const entrySeverities = new Set(["error", "warning", "info", "debug", "unknown"]);
 
 function validateFilters(environment: EnvironmentId, timeRange: TimeRange): void {
   if (!environments.has(environment)) throw new Error(`Unsupported environment: ${environment}`);
@@ -174,6 +178,81 @@ function parseTopology(value: unknown): TopologySnapshot {
   return value as TopologySnapshot;
 }
 
+function isLogPod(value: unknown): value is LogPod {
+  const raw = record(value);
+  return raw !== null && typeof raw.namespace === "string" && typeof raw.name === "string"
+    && Array.isArray(raw.containers) && raw.containers.every((item) => typeof item === "string")
+    && Number.isInteger(raw.restartCount) && Number(raw.restartCount) >= 0;
+}
+
+function isLogEntry(value: unknown): value is LogEntry {
+  const raw = record(value);
+  return raw !== null && typeof raw.id === "string" && nullableTimestamp(raw.timestamp)
+    && typeof raw.namespace === "string" && typeof raw.pod === "string" && typeof raw.container === "string"
+    && typeof raw.previous === "boolean" && entrySeverities.has(String(raw.severity))
+    && typeof raw.message === "string" && (raw.correlationId === null || typeof raw.correlationId === "string");
+}
+
+function isLogEvent(value: unknown): value is CorrelatedKubernetesEvent {
+  const raw = record(value);
+  return raw !== null && typeof raw.id === "string" && timestamp(raw.timestamp) && typeof raw.namespace === "string"
+    && typeof raw.targetKind === "string" && typeof raw.targetName === "string"
+    && ["Normal", "Warning", "Unknown"].includes(String(raw.type)) && typeof raw.reason === "string" && typeof raw.message === "string";
+}
+
+function eventsWithinObjectLimit(values: readonly unknown[], maximum: number): boolean {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    if (!isLogEvent(value)) return false;
+    const key = `${value.namespace}/${value.targetKind}/${value.targetName}`;
+    const count = (counts.get(key) ?? 0) + 1;
+    if (count > maximum) return false;
+    counts.set(key, count);
+  }
+  return true;
+}
+
+function isLogSource(value: unknown): value is LogSourceStatus {
+  const raw = record(value);
+  return raw !== null && ["kubernetes-pod-logs", "kubernetes-events"].includes(String(raw.name))
+    && ["available", "partial", "unavailable"].includes(String(raw.availability))
+    && (raw.message === null || typeof raw.message === "string");
+}
+
+function isLogOmission(value: unknown): value is LogOmission {
+  const raw = record(value);
+  return raw !== null && ["workload-discovery", "kubernetes-pod-logs", "kubernetes-events"].includes(String(raw.source))
+    && typeof raw.scope === "string" && typeof raw.reason === "string";
+}
+
+function parseLogs(value: unknown): LogCorrelationSnapshot {
+  const raw = record(value); const service = record(raw?.service); const window = record(raw?.window); const filters = record(raw?.filters);
+  const limits = record(raw?.limits); const redaction = record(raw?.redaction);
+  if (raw === null || raw.apiVersion !== 1 || !["live", "partial"].includes(String(raw.mode)) || !timestamp(raw.assembledAt)
+    || service === null || typeof service.id !== "string" || typeof service.name !== "string" || typeof service.environment !== "string"
+    || window === null || !timeRanges.has(window.range as TimeRange) || !timestamp(window.start) || !timestamp(window.end)
+    || filters === null || !logEnvironments.has(filters.environment as EnvironmentId) || typeof filters.serviceId !== "string"
+    || !timeRanges.has(filters.range as TimeRange) || !(filters.pod === null || typeof filters.pod === "string")
+    || !logSeverities.has(String(filters.severity)) || typeof filters.queryApplied !== "boolean" || typeof filters.correlationIdApplied !== "boolean"
+    || limits === null || !["maxPods", "maxStreams", "maxEntries", "maxEventsPerObject", "maxEvents"].every((key) => Number.isInteger(limits[key]) && Number(limits[key]) > 0)
+    || Number(limits.maxPods) > 20 || Number(limits.maxStreams) > 40 || Number(limits.maxEntries) > 1000 || Number(limits.maxEvents) > 100
+    || limits.maxEventsPerObject !== 5
+    || typeof raw.truncated !== "boolean" || !Array.isArray(raw.pods) || !raw.pods.every(isLogPod) || raw.pods.length > Number(limits.maxPods)
+    || !Array.isArray(raw.entries) || !raw.entries.every(isLogEntry) || raw.entries.length > Number(limits.maxEntries) || raw.entries.some((entry) => entry.message.length > 8192)
+    || !Array.isArray(raw.events) || !eventsWithinObjectLimit(raw.events, limits.maxEventsPerObject) || raw.events.length > Number(limits.maxEvents)
+    || !Array.isArray(raw.sources) || raw.sources.length !== 2 || !raw.sources.every(isLogSource)
+    || !Array.isArray(raw.omissions) || !raw.omissions.every(isLogOmission)
+    || redaction === null || redaction.applied !== true || redaction.replacement !== "[REDACTED]" || typeof redaction.description !== "string") {
+    throw new Error("Log API returned a malformed response");
+  }
+  return value as LogCorrelationSnapshot;
+}
+
+function validateLogQuery(query: LogQuery): void {
+  if (!logEnvironments.has(query.environment) || !timeRanges.has(query.range) || !logSeverities.has(query.severity)) throw new Error("Unsupported log filter");
+  if (query.serviceId.trim() === "" || query.query.length > 100 || query.correlationId.length > 128) throw new Error("Unsupported log filter");
+}
+
 function timestamp(value: unknown): value is string {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
@@ -299,6 +378,38 @@ function fixturePerformance(environment: EnvironmentId, serviceId: string, range
   };
 }
 
+function fixtureLogs(query: LogQuery): LogCorrelationSnapshot {
+  validateLogQuery(query);
+  const service = serviceFixtures.find((item) => item.id === query.serviceId);
+  if (service === undefined || query.environment !== "all" && service.environment !== query.environment) throw new Error("Unsupported log filter");
+  const fixturePod = service.id === "erpnet" ? null : { namespace: service.environment === "shared" ? "default" : service.environment, name: `${service.id}-fixture` };
+  const podName = fixturePod?.name ?? null;
+  if (query.pod !== null && query.pod !== podName) throw new Error(`Pod ${query.pod} is not mapped to service ${service.id}`);
+  const window = { range: query.range, start: "2026-08-12T14:15:00Z", end: "2026-08-12T15:15:00Z" } as const;
+  const allEntries: readonly LogEntry[] = podName === null ? [] : [
+    { id: "fixture-entry-1", timestamp: "2026-08-12T15:14:30Z", namespace: fixturePod?.namespace ?? "fixture", pod: podName, container: "application", previous: false, severity: "error", message: "Request failed safely; password=[REDACTED]", correlationId: "fixture-req-42" },
+    { id: "fixture-entry-2", timestamp: "2026-08-12T15:14:00Z", namespace: fixturePod?.namespace ?? "fixture", pod: podName, container: "application", previous: false, severity: "info", message: "Request completed", correlationId: "fixture-req-41" }
+  ];
+  const text = query.query.trim().toLowerCase();
+  const entries = allEntries.filter((entry) => (query.severity === "all" || entry.severity === query.severity)
+    && (text === "" || entry.message.toLowerCase().includes(text))
+    && (query.correlationId === "" || entry.correlationId === query.correlationId));
+  const events: readonly CorrelatedKubernetesEvent[] = podName === null ? [] : [{ id: "fixture-event-1", timestamp: "2026-08-12T15:13:30Z", namespace: fixturePod?.namespace ?? "fixture", targetKind: "Pod", targetName: podName, type: "Warning", reason: "BackOff", message: "Fixture container restart back-off" }];
+  const available = podName !== null;
+  const unavailableMessage = "No Kubernetes workload mapping exists for this service.";
+  return {
+    apiVersion: 1, mode: available ? "live" : "partial", assembledAt: window.end,
+    service: { id: service.id, name: service.name, environment: service.environment }, window,
+    filters: { environment: query.environment, serviceId: query.serviceId, range: query.range, pod: query.pod, severity: query.severity, queryApplied: query.query !== "", correlationIdApplied: query.correlationId !== "" },
+    limits: { maxPods: 8, maxStreams: 16, maxEntries: 500, maxEventsPerObject: 5, maxEvents: 50 }, truncated: false,
+    pods: podName === null ? [] : [{ namespace: fixturePod?.namespace ?? "fixture", name: podName, containers: ["application"], restartCount: 1 }],
+    entries, events,
+    sources: [{ name: "kubernetes-pod-logs", availability: available ? "available" : "unavailable", message: available ? null : unavailableMessage }, { name: "kubernetes-events", availability: available ? "available" : "unavailable", message: available ? null : unavailableMessage }],
+    omissions: available ? [] : [{ source: "workload-discovery", scope: service.id, reason: unavailableMessage }],
+    redaction: { applied: true, replacement: "[REDACTED]", description: "Fixture evidence is sanitized before response assembly." }
+  };
+}
+
 export function createFixtureMonitoringProvider(): MonitoringProvider {
   let incidents: readonly IncidentSummary[] = incidentFixtures.map((incident) => ({ ...incident, evidence: [...incident.evidence], runbook: { ...incident.runbook, steps: [...incident.runbook.steps] } }));
   const audit = new Map<string, IncidentAuditEvent[]>(incidents.map((incident) => [incident.id, [{
@@ -359,6 +470,9 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
     },
     getTopology(environment: EnvironmentId): Promise<TopologySnapshot> {
       return Promise.resolve().then(() => { if (!environments.has(environment)) throw new Error(`Unsupported environment: ${environment}`); return fixtureTopology(environment); });
+    },
+    getLogs(query: LogQuery): Promise<LogCorrelationSnapshot> {
+      return Promise.resolve().then(() => fixtureLogs(query));
     },
     getIncidents(environment: EnvironmentId, statusFilter: IncidentStatusFilter): Promise<IncidentListResponse> {
       return Promise.resolve().then(() => {
@@ -486,6 +600,15 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
     async getTopology(environment: EnvironmentId): Promise<TopologySnapshot> {
       if (!environments.has(environment)) throw new Error(`Unsupported environment: ${environment}`);
       return parseTopology(await fetchJson(`/api/v1/topology?environment=${encodeURIComponent(environment)}`, "Topology API"));
+    },
+    async getLogs(query: LogQuery): Promise<LogCorrelationSnapshot> {
+      validateLogQuery(query);
+      const parameters = new URLSearchParams({ environment: query.environment, service: query.serviceId, range: query.range });
+      if (query.pod !== null) parameters.set("pod", query.pod);
+      parameters.set("severity", query.severity);
+      parameters.set("query", query.query);
+      parameters.set("correlationId", query.correlationId);
+      return parseLogs(await fetchJson(`/api/v1/logs?${parameters.toString()}`, "Log API"));
     },
     async getIncidents(environment: EnvironmentId, statusFilter: IncidentStatusFilter): Promise<IncidentListResponse> {
       if (!incidentEnvironments.has(environment) || !incidentStatusFilters.has(statusFilter)) throw new Error("Unsupported incident filter");

@@ -489,7 +489,7 @@ fetch_http() {
 }
 
 verify_portal_routes() {
-    local routes=("/" "/deployments" "/services/cpq-demo" "/infrastructure" "/performance" "/incidents" "/settings")
+    local routes=("/" "/deployments" "/services/cpq-demo" "/infrastructure" "/performance" "/incidents" "/logs" "/settings")
     local route
     local html
     for route in "${routes[@]}"; do
@@ -509,6 +509,10 @@ verify_portal_routes() {
         fail "Portal bundle does not contain the required Prometheus performance interface."
     grep -Fq 'Kubernetes inventory' <<< "$bundle" || \
         fail "Portal bundle does not contain the required infrastructure topology interface."
+    grep -Fq 'Logs & events' <<< "$bundle" || \
+        fail "Portal bundle does not contain the required log and event correlation interface."
+    grep -Fq 'Server-side redaction applied' <<< "$bundle" || \
+        fail "Portal bundle does not contain the required log-redaction disclosure."
 
     local inventory
     inventory="$(fetch_http "Inventory API" "http://127.0.0.1:3100/api/v1/inventory?environment=all")"
@@ -535,6 +539,14 @@ verify_portal_routes() {
     grep -Fq '"apiVersion":1' <<< "$incidents" || fail "Incident API response has no supported API version."
     grep -Fq '"name":"inventory-health-evaluator"' <<< "$incidents" || fail "Incident API response is missing its live alert source."
     grep -Fq '"state":"unconfigured"' <<< "$incidents" || fail "Incident API must disclose that notifications are unconfigured."
+    local logs
+    logs="$(fetch_http "Log correlation API" "http://127.0.0.1:3100/api/v1/logs?environment=demo&service=cpq-demo&range=1h")"
+    grep -Fq '"apiVersion":1' <<< "$logs" || fail "Log correlation API response has no supported API version."
+    grep -Fq '"id":"cpq-demo"' <<< "$logs" || fail "Log correlation API response did not retain the selected service."
+    grep -Fq '"name":"kubernetes-pod-logs","availability":"available"' <<< "$logs" || \
+        fail "Kubernetes pod logs are unavailable; separately apply and verify the reviewed pods/log RBAC rule."
+    grep -Fq '"name":"kubernetes-events","availability":"available"' <<< "$logs" || fail "Kubernetes event correlation is unavailable."
+    grep -Fq '"applied":true' <<< "$logs" || fail "Log correlation API response does not declare server-side redaction."
     local source_evidence
     source_evidence="$(fetch_http "Internal Gatus evidence proxy" "http://127.0.0.1:3100/tools/gatus-internal/api/v1/endpoints/statuses")"
     grep -Fq 'cpq-demo-ready-internal' <<< "$source_evidence" || fail "Internal Gatus evidence proxy is missing CPQ Demo."

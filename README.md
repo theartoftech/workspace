@@ -1,8 +1,8 @@
 # Development Lab Observability
 
-This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 5 are complete and deployed: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, read-only Kubernetes topology, and persistent alert-driven incident operations. Sprint 5 passed automated lab deployment verification and human UI acceptance on 2026-08-14.
+This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 5 are complete and deployed: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, read-only Kubernetes topology, and persistent alert-driven incident operations. Sprint 6 log and event correlation is implemented and locally verified but has not yet been deployed or human-accepted.
 
-Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 5 alerts and incident operations are complete, deployed, and user-verified. Sprint 6 logs and event correlation is the next planned increment.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 5 alerts and incident operations are complete, deployed, and user-verified. Sprint 6 requires a separate review and apply of the namespace-bounded `pods/log` permission before an explicitly authorized deployment.
 
 ## Foundation scope
 
@@ -17,9 +17,10 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Internal reachability | CPQ demo/test, OAuth demo/test, Mailpit, and ERPNet from the CPQ server |
 | Public-path simulation | Public CPQ demo and ERPNet URLs, including TLS expiry, from the same CPQ server—not an independent external vantage |
 | Incident operations | Deployed persistent SQLite incidents, inventory-health alert evaluation, bounded silences, state transitions, runbooks, and audit history |
+| Log correlation | Locally implemented direct Kubernetes pod-log and event correlation with fixed windows, server-side redaction, partial-source disclosure, and diagnostic JSON export |
 | Alert delivery | Explicitly unconfigured until notification destinations and credential handling are selected |
 
-Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Settings remains a preview. Per-user OIDC identity, notification delivery, safe transaction journeys, log aggregation, and additional application scrapes remain later-sprint work.
+Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Sprint 6 adds direct, ephemeral Kubernetes pod logs rather than a durable aggregated log store. Settings remains a preview. Per-user OIDC identity, notification delivery, durable log aggregation/retention, safe transaction journeys, and additional application scrapes remain later-sprint work.
 
 ## Repository layout
 
@@ -30,12 +31,13 @@ Overview, deployments, service detail, infrastructure topology, and incident eva
 - `deploy/compose/lab-observability` — primary single-host Docker lab stack.
 - `deploy/portal` — digest-pinned multi-stage portal image and hardened Nginx runtime.
 - `deploy/inventory-api` — digest-pinned, unprivileged Node image for the read-only inventory API.
-- `deploy/kubernetes/inventory-reader-rbac.yaml` — namespace-bounded, read-only Kubernetes topology RBAC.
+- `deploy/kubernetes/inventory-reader-rbac.yaml` — namespace-bounded, read-only Kubernetes topology and pod-log RBAC.
 - `server/src` and `shared` — typed upstream adapters, aggregation/API logic, and browser/server contracts.
 - `deployment/scripts` — guarded plan, preflight, deploy, status, and verification commands.
 - `deployment/PORTAL_ROLLBACK.md` — independent portal-image and Cloudflare-origin rollback procedures.
 - `documentation/adr/0004-kubernetes-topology-architecture.md` — bounded topology API, issue taxonomy, UI scaling, and RBAC decision.
 - `documentation/adr/0005-persistent-incident-operations.md` — incident persistence, evaluation, mutation, identity, and notification boundaries.
+- `documentation/adr/0006-kubernetes-log-correlation.md` — selected lab log source, query bounds, redaction, partial-failure, export, and RBAC boundaries.
 - `deployment/ENVIRONMENTS.md` — target topology, secret preparation, and operator workflow.
 - `probes/internal` — Gatus node intended to run inside the lab network.
 - `probes/external` — Gatus node intended to run on an independent public host.
@@ -64,7 +66,7 @@ In another console, start the portal:
 npm run dev
 ```
 
-Vite proxies `/api` to the local API on port `3001`; the deployed Compose profile provides the equivalent same-origin proxy. Open `/performance` to inspect bounded 15-minute through 24-hour ranges, filter by environment or service, and refresh every live view. The persistent data banner distinguishes live, partial, and test-fixture states. Navigate with the left rail or press `/` to open command search.
+Vite proxies `/api` to the local API on port `3001`; the deployed Compose profile provides the equivalent same-origin proxy. Open `/performance` for bounded metrics or `/logs` for catalog-scoped Kubernetes logs and events across the same 15-minute through 24-hour ranges. The persistent data banner distinguishes live, partial, and test-fixture states. Navigate with the left rail or press `/` to open command search.
 
 Run the complete frontend quality gate with:
 
@@ -78,7 +80,7 @@ npm run lint
 npm run build
 ```
 
-The live route set includes Overview, Deployments, Infrastructure, Performance, Incidents, and `/services/<catalog-id>`. Settings remains a preview. Monitoring evidence routes accept only GET/HEAD. The incident surface adds strict, bounded POST commands for declarations and state transitions; it never accepts a browser-selected actor. Topology inventory is server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives infrastructure credentials or arbitrary PromQL access.
+The live route set includes Overview, Deployments, Infrastructure, Performance, Incidents, Logs, and `/services/<catalog-id>`. Settings remains a preview. Monitoring evidence routes accept only GET/HEAD. The incident surface adds strict, bounded POST commands for declarations and state transitions; it never accepts a browser-selected actor. Topology and log evidence are server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives infrastructure credentials, arbitrary Kubernetes paths, or arbitrary PromQL access.
 
 ## Verification criteria
 
@@ -187,6 +189,8 @@ Use `deployment/scripts/deploy-gatus.sh` for guarded local or SSH-based plan, pr
 - Repeated alert evidence is grouped; stale versions and invalid or repeated transitions fail atomically without partial audit writes.
 - Missing notification configuration and failed live alert evaluation remain explicit and cannot produce a false resolution.
 - Credentials, sensitive headers, URL userinfo, and secret query values are redacted from diagnostics.
+- Pod-log streams, response lines, events, response bytes, concurrency, and time windows are bounded; one failed stream is disclosed without erasing valid evidence.
+- Diagnostic JSON can be generated only from a response that declares server-side redaction and retains source, omission, and cap metadata.
 - Credentials, sensitive query keys, invalid URLs, and TLS checks on plain HTTP are rejected.
 - Probe timeout must remain shorter than its interval.
 - Gatus endpoint IDs, groups, and URLs must exactly match the catalog.
@@ -197,4 +201,4 @@ Use `deployment/scripts/deploy-gatus.sh` for guarded local or SSH-based plan, pr
 
 ## Operational caveats
 
-The Docker lab stack shares the CPQ server's CPU, memory, disk, Docker daemon, network, and power. A host failure therefore removes both the application and its monitoring. Incident SQLite data uses a host-mounted runtime directory, but lab backup and restore have not yet been operationally certified. cAdvisor also receives privileged, read-only host visibility; that exception is appropriate only for this controlled lab. The public-path Gatus process is not an independent external monitor. The cloud path must use separate failure domains, replicated storage, backups, and independent probes before it is called production-grade.
+The Docker lab stack shares the CPQ server's CPU, memory, disk, Docker daemon, network, and power. A host failure therefore removes both the application and its monitoring. Incident SQLite data uses a host-mounted runtime directory, but lab backup and restore have not yet been operationally certified. Sprint 6 reads current and previous container logs directly from Kubernetes; it does not provide durable retention after pod deletion or log rotation. cAdvisor also receives privileged, read-only host visibility; that exception is appropriate only for this controlled lab. The public-path Gatus process is not an independent external monitor. The cloud path must use separate failure domains, replicated storage, backups, durable log architecture, and independent probes before it is called production-grade.

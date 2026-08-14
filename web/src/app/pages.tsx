@@ -21,10 +21,12 @@ import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContai
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import type { PerformanceMetric, PerformanceMetricId } from "../../../shared/performance";
+import type { LogCorrelationSnapshot, LogSeverityFilter } from "../../../shared/logs";
 import type { TopologyResource, TopologyResourceKind, TopologySnapshot } from "../../../shared/topology";
 import { StateGallery } from "../components/StateGallery";
 import { StatusBadge } from "../components/StatusBadge";
 import type { IncidentDetailResponse, IncidentListResponse, IncidentStatusFilter, IncidentSummary, IncidentTransitionCommand, MonitoringProvider, OverviewSnapshot, PerformanceSnapshot, TimeRange } from "../data/types";
+import { buildLogDiagnosticBundle } from "../data/diagnostics";
 
 interface SnapshotPageProps {
   readonly snapshot: OverviewSnapshot;
@@ -221,7 +223,7 @@ export function OverviewPage({ snapshot }: SnapshotPageProps): React.JSX.Element
   );
 }
 
-export function ServiceDetailPage({ snapshot }: SnapshotPageProps): React.JSX.Element {
+export function ServiceDetailPage({ snapshot, timeRange }: SnapshotPageProps & { readonly timeRange: TimeRange }): React.JSX.Element {
   const { serviceId } = useParams<{ readonly serviceId: string }>();
   const service = snapshot.services.find((item) => item.id === serviceId);
   if (service === undefined) {
@@ -233,7 +235,7 @@ export function ServiceDetailPage({ snapshot }: SnapshotPageProps): React.JSX.El
         eyebrow={`Inventory / ${environmentLabel(service.environment)}`}
         title={service.name}
         description="Read-only service detail assembled from catalog, reachability probes, and mapped workloads."
-        action={<Link className="secondary-button" to="/">Back to inventory</Link>}
+        action={<div className="page-actions"><Link className="secondary-button" to={`/logs?service=${encodeURIComponent(service.id)}&range=${timeRange}`}>Investigate logs</Link><Link className="secondary-button" to="/">Back to inventory</Link></div>}
       />
       <section className="metrics-grid compact-metrics" aria-label="Service summary">
         <MetricCard label="Current state" value={service.state} note={`Criticality: ${service.criticality}`} tone={service.state === "healthy" ? "positive" : service.state === "failing" ? "danger" : "warning"} icon={CheckCircleIcon} />
@@ -516,6 +518,7 @@ export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: P
                 <div><span>Observed version</span><strong>{selectedInventory.version ?? "Unavailable"}</strong></div>
                 <div><span>Workloads</span><strong>{selectedInventory.workloads.length === 0 ? "No evidence" : selectedInventory.workloads.map((workload) => `${workload.ready ?? "?"}/${workload.desired ?? "?"} ${workload.name}`).join(", ")}</strong></div>
                 <div><span>Last workload check</span><strong>{formattedTimestamp(selectedInventory.lastCheckedAt)}</strong></div>
+                <div><span>Diagnostics</span><Link to={`/logs?service=${encodeURIComponent(selectedInventory.id)}&range=${timeRange}`}>View correlated logs</Link></div>
               </div>
             )}
           </article>
@@ -525,9 +528,147 @@ export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: P
   );
 }
 
+interface LogsPageProps extends SnapshotPageProps {
+  readonly provider: MonitoringProvider;
+  readonly timeRange: TimeRange;
+  readonly refreshKey: number;
+}
+
+interface AppliedLogFilters {
+  readonly serviceId: string;
+  readonly pod: string | null;
+  readonly severity: LogSeverityFilter;
+  readonly query: string;
+  readonly correlationId: string;
+}
+
+function requestedSeverity(value: string | null): LogSeverityFilter {
+  return value === "error" || value === "warning" || value === "info" || value === "debug" || value === "unknown" ? value : "all";
+}
+
+function diagnosticFilename(snapshot: LogCorrelationSnapshot): string {
+  const stamp = snapshot.assembledAt.replaceAll(":", "-");
+  return `workspace-monitor-${snapshot.service.id}-${stamp}.json`;
+}
+
+export function LogsPage({ snapshot, provider, timeRange, refreshKey }: LogsPageProps): React.JSX.Element {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedService = searchParams.get("service");
+  const initialService = snapshot.services.some((service) => service.id === requestedService) ? requestedService as string : snapshot.services[0]?.id ?? "";
+  const initial: AppliedLogFilters = {
+    serviceId: initialService,
+    pod: searchParams.get("pod"),
+    severity: requestedSeverity(searchParams.get("severity")),
+    query: searchParams.get("query") ?? "",
+    correlationId: searchParams.get("correlationId") ?? ""
+  };
+  const [serviceId, setServiceId] = useState(initial.serviceId);
+  const [pod, setPod] = useState(initial.pod ?? "");
+  const [severity, setSeverity] = useState<LogSeverityFilter>(initial.severity);
+  const [query, setQuery] = useState(initial.query);
+  const [correlationId, setCorrelationId] = useState(initial.correlationId);
+  const [applied, setApplied] = useState<AppliedLogFilters>(initial);
+  const [logs, setLogs] = useState<LogCorrelationSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (snapshot.services.some((service) => service.id === serviceId)) return;
+    const next = snapshot.services[0]?.id ?? "";
+    setServiceId(next);
+    setPod("");
+    setApplied({ serviceId: next, pod: null, severity, query, correlationId });
+  }, [correlationId, query, serviceId, severity, snapshot.services]);
+
+  useEffect(() => {
+    let active = true;
+    setLogs(null);
+    setError(null);
+    if (applied.serviceId === "") {
+      setError("No monitored service is available in the selected environment.");
+      return () => { active = false; };
+    }
+    if (provider.getLogs === undefined) {
+      setError("Log and event correlation is not configured.");
+      return () => { active = false; };
+    }
+    void provider.getLogs({ environment: snapshot.environment, serviceId: applied.serviceId, range: timeRange, pod: applied.pod, severity: applied.severity, query: applied.query, correlationId: applied.correlationId })
+      .then((response) => { if (active) setLogs(response); })
+      .catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : "Unknown log correlation error"); });
+    return () => { active = false; };
+  }, [applied, provider, refreshKey, snapshot.environment, timeRange]);
+
+  function applyFilters(event: React.SyntheticEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const next: AppliedLogFilters = { serviceId, pod: pod === "" ? null : pod, severity, query: query.trim(), correlationId: correlationId.trim() };
+    setApplied(next);
+    const parameters = new URLSearchParams({ service: next.serviceId, range: timeRange });
+    if (next.pod !== null) parameters.set("pod", next.pod);
+    if (next.severity !== "all") parameters.set("severity", next.severity);
+    if (next.query !== "") parameters.set("query", next.query);
+    if (next.correlationId !== "") parameters.set("correlationId", next.correlationId);
+    setSearchParams(parameters);
+  }
+
+  function downloadDiagnostics(): void {
+    if (logs === null) return;
+    setExportError(null);
+    try {
+      const blob = new Blob([`${JSON.stringify(buildLogDiagnosticBundle(logs), null, 2)}\n`], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = diagnosticFilename(logs);
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (cause: unknown) {
+      setExportError(cause instanceof Error ? cause.message : "Diagnostic export failed");
+    }
+  }
+
+  const podOptions = logs?.service.id === serviceId ? logs.pods : [];
+  return (
+    <>
+      <PageHeader eyebrow="Observability / Diagnostics" title="Logs & events" description="Time-bounded, catalog-scoped Kubernetes pod logs and events with server-side credential redaction." action={<button className="secondary-button" type="button" aria-label="Download diagnostic JSON" disabled={logs === null} onClick={downloadDiagnostics}>Download diagnostic JSON</button>} />
+      <form className="log-filters" aria-label="Log correlation filters" onSubmit={applyFilters}>
+        <label><span>Service</span><select aria-label="Log service" value={serviceId} onChange={(event) => { setServiceId(event.target.value); setPod(""); }}>{snapshot.services.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}</select></label>
+        <label><span>Pod</span><select aria-label="Pod filter" value={pod} onChange={(event) => setPod(event.target.value)}><option value="">All mapped pods</option>{podOptions.map((item) => <option key={`${item.namespace}/${item.name}`} value={item.name}>{item.namespace}/{item.name}</option>)}</select></label>
+        <label><span>Severity</span><select aria-label="Log severity" value={severity} onChange={(event) => setSeverity(event.target.value as LogSeverityFilter)}><option value="all">All severities</option><option value="error">Error</option><option value="warning">Warning</option><option value="info">Info</option><option value="debug">Debug</option><option value="unknown">Unknown</option></select></label>
+        <label className="log-search"><span>Message search</span><input aria-label="Search log messages" type="search" maxLength={100} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <label><span>Correlation ID</span><input aria-label="Correlation ID" maxLength={128} value={correlationId} onChange={(event) => setCorrelationId(event.target.value)} /></label>
+        <button className="primary-button" type="submit">Apply filters</button>
+      </form>
+      {error !== null && <section className="performance-source performance-source-error" role="alert"><WarningCircleIcon aria-hidden="true" size={20} /><div><strong>Log correlation unavailable</strong><span>{error}</span></div></section>}
+      {logs === null && error === null && <section className="performance-source" role="status"><div><strong>Loading correlated evidence</strong><span>Running bounded Kubernetes log and event requests…</span></div></section>}
+      {exportError !== null && <p className="log-export-error" role="alert">Diagnostic export failed: {exportError}</p>}
+      {logs !== null && <>
+        <section className="log-source-strip" aria-label="Log evidence status">
+          {logs.sources.map((item) => <div className={`log-source log-source-${item.availability}`} key={item.name}><strong>{item.name.replaceAll("-", " ")}</strong><span>{item.availability}</span><p>{item.message ?? "Bounded source request completed."}</p></div>)}
+          <div className="log-source log-source-redacted"><strong>Server-side redaction applied</strong><span>{logs.redaction.replacement}</span><p>{logs.redaction.description}</p></div>
+        </section>
+        <section className="log-summary" aria-label="Correlation summary">
+          <span>{logs.pods.length}/{logs.limits.maxPods} mapped pods / cap</span><span>{logs.limits.maxStreams} stream cap</span><span><strong>{logs.entries.length}</strong> log lines</span><span><strong>{logs.events.length}</strong> events</span><span><strong>{timeRange}</strong> bounded window</span>
+        </section>
+        {(logs.truncated || logs.omissions.length > 0) && <section className="log-omissions" role="status"><strong>{logs.truncated ? "Evidence was capped by server limits." : "Partial evidence returned."}</strong><ul>{logs.omissions.map((item, index) => <li key={`${item.source}/${item.scope}/${index}`}><span>{item.source} · {item.scope}</span>{item.reason}</li>)}</ul></section>}
+        <section className="log-evidence-grid">
+          <article className="panel log-stream-panel">
+            <PanelHeader title="Pod log stream" meta={`${formattedTimestamp(logs.window.start)}–${formattedTimestamp(logs.window.end)} · max ${logs.limits.maxEntries} lines`} />
+            {logs.entries.length === 0 ? <p className="empty-panel-copy">No log lines matched the selected service, time window, and filters. Missing evidence is not treated as zero activity.</p> : <ol className="log-stream">{logs.entries.map((entry) => <li key={entry.id} className={`log-entry log-entry-${entry.severity}`}><time>{formattedTimestamp(entry.timestamp)}</time><span>{entry.namespace}/{entry.pod} · {entry.container}{entry.previous ? " · previous" : ""}</span><b>{entry.severity}</b><code>{entry.message}</code>{entry.correlationId !== null && <small>Correlation {entry.correlationId}</small>}</li>)}</ol>}
+          </article>
+          <article className="panel log-events-panel">
+            <PanelHeader title="Kubernetes events" meta={`max ${logs.limits.maxEvents} relevant events · ${logs.limits.maxEventsPerObject}/object`} />
+            {logs.events.length === 0 ? <p className="empty-panel-copy">No timestamped Kubernetes events matched this service and bounded window.</p> : <ol className="log-events">{logs.events.map((event) => <li key={event.id}><div><strong>{event.type} · {event.reason}</strong><time>{formattedTimestamp(event.timestamp)}</time></div><span>{event.namespace}/{event.targetKind}/{event.targetName}</span><p>{event.message}</p></li>)}</ol>}
+          </article>
+        </section>
+      </>}
+    </>
+  );
+}
+
 interface IncidentsPageProps extends SnapshotPageProps {
   readonly provider: MonitoringProvider;
   readonly environment: OverviewSnapshot["environment"];
+  readonly timeRange: TimeRange;
   readonly refreshKey: number;
   readonly onMutated: () => void;
 }
@@ -541,7 +682,7 @@ const actionLabels: Readonly<Record<OperatorAction, { readonly title: string; re
   resolve: { title: "Resolve incident", confirm: "Confirm resolution" }
 };
 
-export function IncidentsPage({ snapshot, provider, environment, refreshKey, onMutated }: IncidentsPageProps): React.JSX.Element {
+export function IncidentsPage({ snapshot, provider, environment, timeRange, refreshKey, onMutated }: IncidentsPageProps): React.JSX.Element {
   const [statusFilter, setStatusFilter] = useState<IncidentStatusFilter>("active");
   const [severityFilter, setSeverityFilter] = useState<"all" | IncidentSummary["severity"]>("all");
   const [query, setQuery] = useState("");
@@ -694,6 +835,7 @@ export function IncidentsPage({ snapshot, provider, environment, refreshKey, onM
             <button className="secondary-button" type="button" disabled={selected.status === "resolved" || selected.silence?.active === true} onClick={() => { setCommandError(null); setActionReason(""); setAction("silence"); }}>Silence</button>
             <button className="secondary-button" type="button" disabled={selected.status === "resolved"} onClick={() => { setCommandError(null); setActionReason(""); setAction("resolve"); }}>Resolve</button>
             <button className="secondary-button" type="button" onClick={() => setRunbookOpen(true)}>Open runbook</button>
+            <Link className="secondary-button" aria-label={`Investigate logs for ${selected.serviceName}`} to={`/logs?service=${encodeURIComponent(selected.serviceId)}&range=${timeRange}`}>Investigate logs</Link>
           </div>
           <section className="incident-evidence"><h3>Source evidence</h3>{selected.evidence.map((evidence) => <div key={evidence.source}><strong>{evidence.source}</strong><span>{evidence.state} · {evidence.occurrences} observations</span><p>{evidence.message}</p></div>)}</section>
           <section className="incident-timeline"><h3>Audit history</h3><ol>{detail?.audit.map((event) => <li key={event.id}><strong>{event.action.replaceAll("_", " ")}</strong><span>{event.actor} · {formattedTimestamp(event.createdAt)} · v{event.version}</span><p>{event.reason}</p></li>)}</ol></section>

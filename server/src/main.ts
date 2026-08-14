@@ -8,6 +8,7 @@ import { FetchJsonHttpClient } from "./http";
 import { IncidentOperationsService, SqliteIncidentRepository } from "./incidents";
 import { InventoryAggregator } from "./inventory";
 import { KubernetesAdapter } from "./kubernetes";
+import { KubernetesLogReader, UnavailableLogReader, type LogReader } from "./logs";
 import { PrometheusPerformanceReader } from "./prometheus";
 import { UnavailableSourceCollector, type SourceCollector } from "./source";
 import { KubernetesTopologyReader, UnavailableTopologyReader, type TopologyReader } from "./topology";
@@ -59,6 +60,28 @@ async function topologyReader(
   return new KubernetesTopologyReader({ ...config.kubernetes, bearerToken: token, catalog, client });
 }
 
+async function logReader(
+  config: ReturnType<typeof parseRuntimeConfig>,
+  catalog: Awaited<ReturnType<typeof loadCatalog>>,
+  client: FetchJsonHttpClient
+): Promise<LogReader> {
+  let token: string;
+  try {
+    token = (await readFile(config.kubernetes.tokenFile, "utf8")).trim();
+  } catch {
+    return new UnavailableLogReader(catalog, "Kubernetes read-only credential file is unavailable");
+  }
+  if (token === "") return new UnavailableLogReader(catalog, "Kubernetes read-only credential file is empty");
+  return new KubernetesLogReader({
+    apiUrl: config.kubernetes.apiUrl,
+    bearerToken: token,
+    catalog,
+    jsonClient: client,
+    textClient: client,
+    concurrency: Math.min(config.kubernetes.concurrency, 8)
+  });
+}
+
 async function run(): Promise<void> {
   const config = parseRuntimeConfig(process.env);
   const catalog = await loadCatalog(config.catalogPath);
@@ -96,7 +119,8 @@ async function run(): Promise<void> {
       concurrency: config.prometheus.concurrency
     }),
     await topologyReader(config, catalog, client),
-    incidentService
+    incidentService,
+    await logReader(config, catalog, client)
   );
   server.listen(config.port, "0.0.0.0", () => {
     process.stdout.write(`Workspace Monitor inventory API listening on port ${config.port}\n`);

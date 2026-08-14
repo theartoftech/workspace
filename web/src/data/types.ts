@@ -8,6 +8,7 @@ import type {
 } from "../../../shared/inventory";
 import type { PerformanceRange, PerformanceSnapshot } from "../../../shared/performance";
 import type { TopologySnapshot } from "../../../shared/topology";
+import type { LogCorrelationSnapshot, LogQuery } from "../../../shared/logs";
 import type {
   DeclareIncidentCommand,
   IncidentDetailResponse,
@@ -44,6 +45,7 @@ export interface MonitoringProvider {
   getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot>;
   getPerformance(environment: EnvironmentId, serviceId: string, timeRange: TimeRange): Promise<PerformanceSnapshot>;
   readonly getTopology?: (environment: EnvironmentId) => Promise<TopologySnapshot>;
+  readonly getLogs?: (query: LogQuery) => Promise<LogCorrelationSnapshot>;
   readonly getIncidents?: (environment: EnvironmentId, statusFilter: IncidentStatusFilter) => Promise<IncidentListResponse>;
   readonly getIncident?: (id: string) => Promise<IncidentDetailResponse>;
   readonly declareIncident?: (command: DeclareIncidentCommand) => Promise<IncidentDetailResponse>;
@@ -53,3 +55,4 @@ export interface MonitoringProvider {
 export type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListResponse, IncidentStatusFilter, IncidentSummary, IncidentTransitionCommand } from "../../../shared/incidents";
 export type { PerformanceSnapshot } from "../../../shared/performance";
 export type { TopologySnapshot } from "../../../shared/topology";
+export type { LogCorrelationSnapshot, LogQuery, LogSeverity, LogSeverityFilter } from "../../../shared/logs";

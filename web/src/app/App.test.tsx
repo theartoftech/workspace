@@ -23,7 +23,7 @@ describe("enterprise application shell", () => {
 
     expect(await screen.findByRole("heading", { name: "Fleet overview" })).toBeInTheDocument();
     expect(screen.getByText("Fixture data")).toBeInTheDocument();
-    for (const route of ["Overview", "Deployments", "Infrastructure", "Performance", "Incidents", "Settings"]) {
+    for (const route of ["Overview", "Deployments", "Infrastructure", "Performance", "Incidents", "Logs", "Settings"]) {
       expect(screen.getByRole("link", { name: route })).toBeInTheDocument();
     }
   });
@@ -47,6 +47,54 @@ describe("enterprise application shell", () => {
     expect(await screen.findByRole("heading", { name: "CPQ Demo" })).toBeInTheDocument();
     expect(screen.getByText("Reachability evidence")).toBeInTheDocument();
     expect(screen.getByText("Workload evidence")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Investigate logs" })).toHaveAttribute("href", "/logs?service=cpq-demo&range=1h");
+  });
+
+  it("correlates bounded pod logs and Kubernetes events with explicit filters", async () => {
+    const user = userEvent.setup();
+    let latestService = "";
+    const provider: MonitoringProvider = {
+      getOverview(environment, timeRange) { return fixtureProvider.getOverview(environment, timeRange); },
+      getPerformance(environment, serviceId, timeRange) { return fixtureProvider.getPerformance(environment, serviceId, timeRange); },
+      async getLogs(query) {
+        latestService = query.serviceId;
+        const response = await fixtureProvider.getLogs?.(query);
+        if (response === undefined) throw new Error("Fixture log provider is unavailable");
+        return response;
+      }
+    };
+    render(<MemoryRouter initialEntries={["/logs?service=cpq-demo&range=6h"]}><App provider={provider} /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "Logs & events" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Time range" })).toHaveValue("6h");
+    expect(screen.getByRole("combobox", { name: "Log service" })).toHaveValue("cpq-demo");
+    expect(await screen.findByText("Request failed safely; password=[REDACTED]")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Kubernetes events" })).toBeInTheDocument();
+    expect(screen.getByText("max 50 relevant events · 5/object")).toBeInTheDocument();
+    expect(screen.getByText("Fixture container restart back-off")).toBeInTheDocument();
+    expect(screen.getByText(/Server-side redaction applied/u)).toBeInTheDocument();
+    expect(screen.getByText("16 stream cap")).toBeInTheDocument();
+    expect(screen.getByText("1/8 mapped pods / cap")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download diagnostic JSON" })).toBeEnabled();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Log service" }), "portfolio");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Log severity" }), "error");
+    await user.type(screen.getByRole("searchbox", { name: "Search log messages" }), "failed");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => expect(latestService).toBe("portfolio"));
+    expect(await screen.findByText("Request failed safely; password=[REDACTED]")).toBeInTheDocument();
+  });
+
+  it("deep-links from an incident to correlated logs without losing the time window", async () => {
+    const user = userEvent.setup();
+    renderApp("/incidents?range=6h");
+    await screen.findByRole("heading", { name: "Incidents" });
+    const link = await screen.findByRole("link", { name: /Investigate logs for OAuth \/ Keycloak/u });
+    expect(link).toHaveAttribute("href", "/logs?service=oauth&range=6h");
+    await user.click(link);
+    expect(await screen.findByRole("heading", { name: "Logs & events" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Log service" })).toHaveValue("oauth");
+    expect(screen.getByRole("combobox", { name: "Time range" })).toHaveValue("6h");
   });
 
   it("shows partial source evidence and internal/public disagreement", async () => {

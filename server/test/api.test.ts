@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { InventorySnapshot } from "../../shared/inventory";
+import type { LogCorrelationSnapshot, LogQuery } from "../../shared/logs";
 import type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListResponse, IncidentSummary, IncidentTransitionCommand } from "../../shared/incidents";
 import type { PerformanceSnapshot } from "../../shared/performance";
 import type { TopologySnapshot } from "../../shared/topology";
 import { createInventoryHttpServer, handleInventoryRequest, safeNodeRequestMethod, type IncidentOperations, type InventoryReader, type PerformanceReader } from "../src/api";
 import { IncidentRequestError } from "../src/incidents";
 import { InventoryAggregator } from "../src/inventory";
+import { LogRequestError, type LogReader } from "../src/logs";
 import { PerformanceRequestError } from "../src/prometheus";
 import type { TopologyReader } from "../src/topology";
 import { catalogFixture } from "./fixtures";
@@ -69,6 +71,23 @@ const incidentOperations: IncidentOperations = {
   }
 };
 
+const logSnapshot: LogCorrelationSnapshot = {
+  apiVersion: 1, mode: "live", assembledAt: "2026-08-14T17:00:00.000Z",
+  service: { id: "cpq-demo", name: "CPQ Demo", environment: "demo" },
+  window: { range: "1h", start: "2026-08-14T16:00:00.000Z", end: "2026-08-14T17:00:00.000Z" },
+  filters: { environment: "demo", serviceId: "cpq-demo", range: "1h", pod: null, severity: "all", queryApplied: false, correlationIdApplied: false },
+  limits: { maxPods: 8, maxStreams: 16, maxEntries: 500, maxEventsPerObject: 5, maxEvents: 50 }, truncated: false,
+  pods: [], entries: [], events: [],
+  sources: [{ name: "kubernetes-pod-logs", availability: "available", message: null }, { name: "kubernetes-events", availability: "available", message: null }],
+  omissions: [], redaction: { applied: true, replacement: "[REDACTED]", description: "Secrets are redacted." }
+};
+const logReader: LogReader = {
+  getLogs(query: LogQuery): Promise<LogCorrelationSnapshot> {
+    if (query.serviceId === "missing") return Promise.reject(new LogRequestError("Unsupported service: missing"));
+    return Promise.resolve({ ...logSnapshot, service: { ...logSnapshot.service, id: query.serviceId }, window: { ...logSnapshot.window, range: query.range }, filters: { environment: query.environment, serviceId: query.serviceId, range: query.range, pod: query.pod, severity: query.severity, queryApplied: query.query !== "", correlationIdApplied: query.correlationId !== "" } });
+  }
+};
+
 function request(
   path: string,
   method = "GET",
@@ -81,7 +100,7 @@ function request(
     method,
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body
-  }), inventoryReader, metricsReader, topologyReader, incidents);
+  }), inventoryReader, metricsReader, topologyReader, incidents, logReader);
 }
 
 describe("read-only inventory API", () => {
@@ -133,6 +152,29 @@ describe("read-only inventory API", () => {
     expect(await response.json()).toMatchObject({ apiVersion: 1, environment: "demo", namespaces: ["default"] });
     expect((await request("/api/v1/topology?environment=production")).status).toBe(400);
     expect((await request("/api/v1/topology?query=pods")).status).toBe(400);
+  });
+
+  it("serves bounded correlated logs only through strict allow-listed filters", async () => {
+    const response = await request("/api/v1/logs?environment=demo&service=cpq-demo&range=1h&pod=application-a&severity=error&query=timeout&correlationId=req-42");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      apiVersion: 1,
+      filters: { environment: "demo", serviceId: "cpq-demo", range: "1h", pod: "application-a", severity: "error", queryApplied: true, correlationIdApplied: true }
+    });
+
+    for (const path of [
+      "/api/v1/logs",
+      "/api/v1/logs?service=missing",
+      "/api/v1/logs?service=cpq-demo&environment=shared",
+      "/api/v1/logs?service=cpq-demo&range=30d",
+      "/api/v1/logs?service=cpq-demo&severity=fatal",
+      "/api/v1/logs?service=cpq-demo&promql=up",
+      "/api/v1/logs?service=cpq-demo&service=mailpit"
+    ]) expect((await request(path)).status).toBe(400);
+
+    const head = await request("/api/v1/logs?service=cpq-demo", "HEAD");
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
   });
 
   it("serves bounded incident lists and detail through explicit filters", async () => {
@@ -236,6 +278,7 @@ describe("read-only inventory API", () => {
     expect((await handleInventoryRequest(base, reader, performanceReader, topologyReader)).status).toBe(503);
     expect((await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/performance"), reader)).status).toBe(503);
     expect((await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/topology"), reader, performanceReader)).status).toBe(503);
+    expect((await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/logs?service=cpq-demo"), reader, performanceReader, topologyReader, incidentOperations)).status).toBe(503);
 
     const unavailableTopology: TopologyReader = {
       async getTopology(): Promise<TopologySnapshot> { throw new Error("token=must-not-leak"); }
@@ -256,6 +299,15 @@ describe("read-only inventory API", () => {
 
     expect(response.status).toBe(500);
     expect(body).toContain("Performance telemetry could not be assembled");
+    expect(body).not.toContain("super-secret");
+  });
+
+  it("does not leak unexpected Kubernetes log errors", async () => {
+    const failing: LogReader = { getLogs(): Promise<LogCorrelationSnapshot> { return Promise.reject(new Error("authorization=Bearer super-secret")); } };
+    const response = await handleInventoryRequest(new Request("http://inventory-api.local/api/v1/logs?service=cpq-demo"), reader, performanceReader, topologyReader, incidentOperations, failing);
+    expect(response.status).toBe(500);
+    const body = await response.text();
+    expect(body).toContain("Log correlation could not be assembled");
     expect(body).not.toContain("super-secret");
   });
 

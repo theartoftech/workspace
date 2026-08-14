@@ -36,6 +36,13 @@ describe("fixture monitoring provider", () => {
     expect(topology?.resources).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "Deployment", serviceIds: ["cpq-demo"] })]));
   });
 
+  it("provides deterministic bounded log and event evidence for UI tests", async () => {
+    const logs = await createFixtureMonitoringProvider().getLogs?.({ environment: "demo", serviceId: "cpq-demo", range: "1h", pod: null, severity: "all", query: "", correlationId: "" });
+    expect(logs).toMatchObject({ apiVersion: 1, service: { id: "cpq-demo" }, limits: { maxEntries: 500 }, redaction: { applied: true } });
+    expect(logs?.entries.length).toBeGreaterThan(0);
+    expect(logs?.events.length).toBeGreaterThan(0);
+  });
+
   it("throws an explicit error for an unsupported environment", async () => {
     const provider = createFixtureMonitoringProvider();
 
@@ -128,6 +135,43 @@ describe("fixture monitoring provider", () => {
 
     const malformed = createLiveMonitoringProvider({ fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ apiVersion: 1 }), { status: 200 })), timeoutMs: 1000 });
     await expect(malformed.getTopology?.("demo")).rejects.toThrow("Topology API returned a malformed response");
+  });
+
+  it("loads and validates correlated logs using encoded bounded filters", async () => {
+    const payload = {
+      apiVersion: 1, mode: "partial", assembledAt: "2026-08-14T17:00:00.000Z",
+      service: { id: "cpq-demo", name: "CPQ Demo", environment: "demo" },
+      window: { range: "1h", start: "2026-08-14T16:00:00.000Z", end: "2026-08-14T17:00:00.000Z" },
+      filters: { environment: "demo", serviceId: "cpq-demo", range: "1h", pod: "application-a", severity: "error", queryApplied: true, correlationIdApplied: true },
+      limits: { maxPods: 8, maxStreams: 16, maxEntries: 500, maxEventsPerObject: 5, maxEvents: 50 }, truncated: false,
+      pods: [{ namespace: "default", name: "application-a", containers: ["web"], restartCount: 1 }],
+      entries: [{ id: "entry-1", timestamp: "2026-08-14T16:58:00.000Z", namespace: "default", pod: "application-a", container: "web", previous: false, severity: "error", message: "request failed", correlationId: "req-42" }],
+      events: [{ id: "event-1", timestamp: "2026-08-14T16:57:00.000Z", namespace: "default", targetKind: "Pod", targetName: "application-a", type: "Warning", reason: "BackOff", message: "Restarting" }],
+      sources: [{ name: "kubernetes-pod-logs", availability: "partial", message: "One stream failed." }, { name: "kubernetes-events", availability: "available", message: null }],
+      omissions: [{ source: "kubernetes-pod-logs", scope: "default/application-a/sidecar", reason: "Read-only Kubernetes access was denied." }],
+      redaction: { applied: true, replacement: "[REDACTED]", description: "Secrets are redacted." }
+    } as const;
+    const fetchImpl = vi.fn((): Promise<Response> => Promise.resolve(new Response(JSON.stringify(payload), { status: 200 })));
+    const provider = createLiveMonitoringProvider({ fetchImpl, timeoutMs: 1000 });
+    const logs = await provider.getLogs?.({ environment: "demo", serviceId: "cpq-demo", range: "1h", pod: "application-a", severity: "error", query: "request failed", correlationId: "req-42" });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/logs?environment=demo&service=cpq-demo&range=1h&pod=application-a&severity=error&query=request+failed&correlationId=req-42",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(logs).toMatchObject({ mode: "partial", entries: [{ severity: "error" }], events: [{ reason: "BackOff" }] });
+
+    const malformed = createLiveMonitoringProvider({ fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ apiVersion: 1, entries: [{}] }), { status: 200 })), timeoutMs: 1000 });
+    await expect(malformed.getLogs?.({ environment: "demo", serviceId: "cpq-demo", range: "1h", pod: "application-a", severity: "error", query: "request failed", correlationId: "req-42" })).rejects.toThrow("Log API returned a malformed response");
+
+    const overPerObjectEventLimit = createLiveMonitoringProvider({
+      fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({
+        ...payload,
+        events: Array.from({ length: 6 }, (_, index) => ({ ...payload.events[0], id: `event-${index}` }))
+      }), { status: 200 })),
+      timeoutMs: 1000
+    });
+    await expect(overPerObjectEventLimit.getLogs?.({ environment: "demo", serviceId: "cpq-demo", range: "1h", pod: null, severity: "all", query: "", correlationId: "" })).rejects.toThrow("Log API returned a malformed response");
   });
 
   it("loads persistent incidents and sends strict commands without a browser-selected actor", async () => {
