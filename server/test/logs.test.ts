@@ -50,10 +50,12 @@ const eventList = {
   ]
 };
 
-function clients(failSidecar = false): { readonly json: JsonHttpClient; readonly text: TextHttpClient; readonly urls: string[] } {
+function clients(failSidecar = false): { readonly json: JsonHttpClient; readonly text: TextHttpClient; readonly urls: string[]; readonly textHeaders: Readonly<Record<string, string>>[] } {
   const urls: string[] = [];
+  const textHeaders: Readonly<Record<string, string>>[] = [];
   return {
     urls,
+    textHeaders,
     json: {
       async getJson(url): Promise<unknown> {
         urls.push(url);
@@ -64,8 +66,9 @@ function clients(failSidecar = false): { readonly json: JsonHttpClient; readonly
       }
     },
     text: {
-      async getText(url): Promise<string> {
+      async getText(url, options): Promise<string> {
         urls.push(url);
+        textHeaders.push(options.headers ?? {});
         if (failSidecar && url.includes("container=sidecar")) throw new UpstreamError("unauthorized", "Bearer must-not-leak");
         if (url.includes("previous=true")) return "2026-08-14T16:45:00.000Z previous ERROR correlation_id=req-42 token=log-secret";
         if (url.includes("container=sidecar")) return "2026-08-14T16:56:00.000Z sidecar healthy";
@@ -94,6 +97,8 @@ describe("bounded Kubernetes log and event correlation", () => {
     expect(JSON.stringify(result)).toContain("[REDACTED]");
     expect(fake.urls.find((url) => url.includes("/log?"))).toContain("sinceTime=2026-08-14T16%3A00%3A00.000Z");
     expect(fake.urls.find((url) => url.includes("/log?"))).toContain("tailLines=");
+    expect(fake.textHeaders.length).toBeGreaterThan(0);
+    expect(fake.textHeaders.every((headers) => headers.Accept === undefined)).toBe(true);
   });
 
   it("filters by pod, severity, free text, and correlation id without changing upstream bounds", async () => {

@@ -279,7 +279,8 @@ export class KubernetesLogReader implements LogReader {
     const end = now.toISOString();
     const start = new Date(now.getTime() - rangeMilliseconds[query.range]).toISOString();
     const root = this.options.apiUrl.replace(/\/$/u, "");
-    const headers = { Authorization: `Bearer ${this.options.bearerToken}`, Accept: "application/json" };
+    const authorizationHeaders = { Authorization: `Bearer ${this.options.bearerToken}` };
+    const headers = { ...authorizationHeaders, Accept: "application/json" };
     const omissions: LogOmission[] = [];
     let upstreamTruncated = false;
     let podsTruncated = false;
@@ -332,7 +333,7 @@ export class KubernetesLogReader implements LogReader {
       if (stream.previous) parameters.set("previous", "true");
       const url = `${root}/api/v1/namespaces/${encodeURIComponent(stream.pod.namespace)}/pods/${encodeURIComponent(stream.pod.name)}/log?${parameters.toString()}`;
       try {
-        const payload = await this.options.textClient.getText(url, { headers: { ...headers, Accept: "text/plain" }, maxBytes: 65_536 });
+        const payload = await this.options.textClient.getText(url, { headers: authorizationHeaders, maxBytes: 65_536 });
         return { stream, entries: parseLogLines(stream, payload), error: null } as const;
       } catch (cause: unknown) {
         return { stream, entries: [] as readonly LogEntry[], error: genericReason(cause) } as const;
