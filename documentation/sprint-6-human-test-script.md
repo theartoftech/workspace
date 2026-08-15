@@ -1,5 +1,9 @@
 # Sprint 6 human acceptance script
 
+## Acceptance status
+
+Passed on 2026-08-15. Lab deployment verification and all human acceptance sections completed successfully after the k3s pod-log content-negotiation correction. Retain this script for regression testing.
+
 Run this only after the reviewed `pods/log` RBAC rule has been applied separately, the Sprint 6 candidate has been explicitly deployed, and `deploy-lab-docker.sh verify` passes. Do not paste log contents, tokens, credentials, or downloaded diagnostic bundles into tickets, chat, screenshots, or Git.
 
 ## Preconditions

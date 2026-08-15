@@ -1,8 +1,8 @@
 # Development Lab Observability
 
-This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 5 are complete and deployed: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, read-only Kubernetes topology, and persistent alert-driven incident operations. Sprint 6 log and event correlation is implemented and locally verified but has not yet been deployed or human-accepted.
+This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 6 are complete, deployed, and user-verified: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, read-only Kubernetes topology, persistent alert-driven incident operations, and bounded Kubernetes log and event correlation.
 
-Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 5 alerts and incident operations are complete, deployed, and user-verified. Sprint 6 requires a separate review and apply of the namespace-bounded `pods/log` permission before an explicitly authorized deployment.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 6 logs and event correlation completed deployment verification and human acceptance on 2026-08-15. Sprint 7 enterprise identity and access is the next planned increment.
 
 ## Foundation scope
 

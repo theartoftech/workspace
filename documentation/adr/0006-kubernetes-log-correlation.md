@@ -1,6 +1,6 @@
 # ADR 0006: Bounded Kubernetes log and event correlation
 
-- Status: Accepted and locally implemented; deployment pending
+- Status: Accepted, deployed, and user-verified
 - Date: 2026-08-14
 - Sprint: 6 — Logs and event correlation
 

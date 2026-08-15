@@ -34,7 +34,7 @@
 | 3 | Traffic and performance | Complete, deployed, and user-verified | Inspect real request rate, errors, saturation, and latency graphs |
 | 4 | Infrastructure topology | Complete, deployed, and user-verified | Drill from an environment into workloads, nodes, and dependencies |
 | 5 | Alerts and incident operations | Complete, deployed, and user-verified | Persist, triage, acknowledge, silence, declare, and resolve alert-driven incidents |
-| 6 | Logs and event correlation | Implemented and locally verified; deployment pending | Move from a failed service to relevant logs and Kubernetes events |
+| 6 | Logs and event correlation | Complete, deployed, and user-verified | Move from a failed service to relevant logs and Kubernetes events |
 | 7 | Enterprise identity and access | Planned | Sign in through OIDC and verify role-scoped actions and audit records |
 | 8 | Safe synthetic journeys | Planned | Run non-destructive CPQ/OAuth/Mailpit/ERPNet journeys and see step diagnostics |
 | 9 | Cloud-ready operations | Planned | Install, upgrade, back up, restore, and roll back in an isolated target |
@@ -345,7 +345,7 @@ Provide a focused operational workflow for active problems without becoming a fu
 
 ### Status
 
-Implemented and automatically verified locally on 2026-08-14. Deployment and human acceptance remain pending. Before deployment, the reviewed `pods/log` subresource rule must be applied separately to the existing namespace-bounded service account; the deployment script does not apply or change RBAC.
+Complete, deployed, and user-verified on 2026-08-15. The namespace-bounded `pods/log` rule was reviewed and applied separately to the existing inventory service account; the deployment script did not apply or change RBAC. Deployment verification and the Sprint 6 human acceptance script passed after correcting k3s pod-log content negotiation.
 
 ### Objective
 
