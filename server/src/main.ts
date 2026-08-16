@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 
 import { createInventoryHttpServer } from "./api";
-import { AuthenticationService, parseSessionKeyringJson } from "./auth";
+import { AccessAuthenticationService, parseAccessRoleMappingJson } from "./auth";
 import { loadCatalog } from "./catalog";
 import { parseRuntimeConfig } from "./config";
 import { GatusAdapter } from "./gatus";
@@ -11,14 +11,14 @@ import { InventoryAggregator } from "./inventory";
 import { KubernetesAdapter } from "./kubernetes";
 import { KubernetesLogReader, UnavailableLogReader, type LogReader } from "./logs";
 import { PrometheusPerformanceReader } from "./prometheus";
-import { DirectOidcProvider } from "./oidc";
+import { CloudflareAccessJwtVerifier } from "./cloudflare-access";
 import { UnavailableSourceCollector, type SourceCollector } from "./source";
 import { KubernetesTopologyReader, UnavailableTopologyReader, type TopologyReader } from "./topology";
 import runtimePackage from "../package.json";
 
 if (runtimePackage.type !== "commonjs") throw new Error("Inventory API runtime must use CommonJS modules");
 
-async function readLockedSecret(path: string, label: string): Promise<string> {
+async function readLockedRuntimeFile(path: string, label: string): Promise<string> {
   let metadata: Awaited<ReturnType<typeof stat>>;
   let value: string;
   try {
@@ -111,30 +111,21 @@ async function run(): Promise<void> {
     await kubernetesCollector(config, client)
   ];
   const inventory = new InventoryAggregator(catalog, collectors);
-  const oidcClientSecret = await readLockedSecret(config.authentication.clientSecretFile, "OIDC client secret");
-  const sessionKeyring = parseSessionKeyringJson(await readLockedSecret(config.authentication.sessionKeyringFile, "Authentication session keyring"));
-  const authentication = new AuthenticationService({
+  const roleMapping = parseAccessRoleMappingJson(await readLockedRuntimeFile(config.authentication.roleMappingFile, "Cloudflare Access role mapping"));
+  const authentication = new AccessAuthenticationService({
     config: {
       publicOrigin: config.authentication.publicOrigin,
-      redirectUri: config.authentication.redirectUri,
-      postLogoutRedirectUri: config.authentication.postLogoutRedirectUri,
-      scopes: config.authentication.scopes,
-      roleClaim: config.authentication.roleClaim,
-      displayNameClaim: config.authentication.displayNameClaim,
-      groups: config.authentication.groups,
-      idleSeconds: config.authentication.idleSeconds,
-      absoluteSeconds: config.authentication.absoluteSeconds,
-      transactionSeconds: config.authentication.transactionSeconds,
+      teamDomain: config.authentication.teamDomain,
       auditRetentionDays: config.authentication.auditRetentionDays,
       auditMaxRecords: config.authentication.auditMaxRecords
     },
-    databasePath: config.authentication.sessionDatabasePath,
-    keyring: sessionKeyring,
-    provider: new DirectOidcProvider({
-      issuerUrl: config.authentication.issuerUrl,
-      clientId: config.authentication.clientId,
-      clientSecret: oidcClientSecret,
+    databasePath: config.authentication.auditDatabasePath,
+    roleMapping,
+    verifier: new CloudflareAccessJwtVerifier({
+      teamDomain: config.authentication.teamDomain,
+      audience: config.authentication.audience,
       clockToleranceSeconds: config.authentication.clockToleranceSeconds,
+      maxTokenLifetimeSeconds: config.authentication.maxTokenLifetimeSeconds,
       timeoutSeconds: config.authentication.timeoutSeconds
     })
   });

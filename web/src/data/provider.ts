@@ -305,14 +305,14 @@ function isIncidentEnvelope(value: unknown): boolean {
   const raw = record(value); const notification = record(raw?.notification); const operator = record(raw?.operator);
   return raw !== null && notification !== null && notification.state === "unconfigured" && typeof notification.message === "string"
     && operator !== null && typeof operator.id === "string" && typeof operator.displayName === "string"
-    && workspaceRoles.has(operator.role as WorkspaceRole) && operator.identityMode === "authenticated-session";
+    && workspaceRoles.has(operator.role as WorkspaceRole) && operator.identityMode === "cloudflare-access";
 }
 
 function parseSession(value: unknown): SessionResponse {
   const raw = record(value); const user = record(raw?.user);
   if (raw === null || raw.apiVersion !== 1 || raw.authenticated !== true || user === null
     || typeof user.id !== "string" || typeof user.displayName !== "string" || !workspaceRoles.has(user.role as WorkspaceRole)
-    || !timestamp(raw.expiresAt) || !timestamp(raw.idleExpiresAt)) throw new Error("Session API returned a malformed response");
+    || !timestamp(raw.expiresAt)) throw new Error("Session API returned a malformed response");
   return value as SessionResponse;
 }
 
@@ -443,11 +443,10 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
   const fixtureSession: SessionResponse = {
     apiVersion: 1,
     authenticated: true,
-    user: { id: "oidc:fixture-administrator", displayName: "J. Haynes", role: "administrator" },
-    expiresAt: "2026-08-13T03:15:00Z",
-    idleExpiresAt: "2026-08-12T16:15:00Z"
+    user: { id: "access:fixture-administrator", displayName: "J. Haynes", role: "administrator" },
+    expiresAt: "2026-08-13T03:15:00Z"
   };
-  const operator = { ...fixtureSession.user, identityMode: "authenticated-session" } as const;
+  const operator = { ...fixtureSession.user, identityMode: "cloudflare-access" } as const;
   const fixtureNotification = { state: "unconfigured", message: "Notification delivery is not configured in the deterministic fixture provider." } as const;
   function detail(id: string): IncidentDetailResponse {
     const incident = incidents.find((item) => item.id === id);

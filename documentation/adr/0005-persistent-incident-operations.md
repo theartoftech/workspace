@@ -23,7 +23,7 @@ The API provides bounded, `no-store` routes:
 
 Lists return at most 100 incidents, detail returns at most 100 audit records and 20 evidence sources, command bodies are limited to 16 KiB, and silence durations are restricted to 15, 60, 360, or 1440 minutes. Declaration and transition payloads reject unknown fields. Each transition requires a printable reason and expected version; stale, repeated, invalid, and out-of-order transitions fail without partial mutation. Read routes never trigger evaluation, expire silences, or otherwise mutate state.
 
-The deployed Sprint 6 runtime still uses one configured lab operator identity and does not trust an actor supplied by the browser, query parameters, or forwarding headers. [ADR 0007](0007-enterprise-identity-access.md) supersedes this identity boundary in the locally tested Sprint 7 candidate with validated OIDC session identity and server-side roles. Cloudflare Access remains an external access boundary, not application-level RBAC.
+The deployed Sprint 6 runtime still uses one configured lab operator identity and does not trust an actor supplied by the browser or query parameters. [ADR 0007](0007-enterprise-identity-access.md) supersedes this identity boundary in the locally tested Sprint 7 candidate by cryptographically validating the Cloudflare Access application assertion and applying exact server-side roles.
 
 Notification delivery is explicitly `unconfigured` in every incident envelope. Sprint 5 stores no destination, webhook, SMTP credential, or delivery secret. Selecting channels, credential storage, retries, silencing semantics for delivery, and delivery audit events requires a separate approved design.
 

@@ -150,15 +150,15 @@ function ErrorShell({ message }: { readonly message: string }): React.JSX.Elemen
   return <section className="error-shell" role="alert"><WarningOctagonIcon aria-hidden="true" size={28} /><h1>Monitoring shell unavailable</h1><p>{message}</p></section>;
 }
 
-function AuthenticationShell({ status, message, returnTo }: { readonly status: number; readonly message: string; readonly returnTo: string }): React.JSX.Element {
+function AuthenticationShell({ status, message }: { readonly status: number; readonly message: string }): React.JSX.Element {
   const anonymous = status === 401;
   return (
     <main className="authentication-shell" id="main-content">
       <section className="error-shell" role="alert">
         <WarningOctagonIcon aria-hidden="true" size={28} />
-        <h1>{anonymous ? "Authentication required" : status === 503 ? "Identity provider unavailable" : "Authentication unavailable"}</h1>
+        <h1>{anonymous ? "Cloudflare Access identity required" : status === 503 ? "Identity validation unavailable" : "Authentication unavailable"}</h1>
         <p>{message}</p>
-        {anonymous && <a className="primary-button" href={`/auth/login?returnTo=${encodeURIComponent(returnTo)}`}>Sign in</a>}
+        {anonymous && <a className="primary-button" href="/cdn-cgi/access/logout">Sign in again</a>}
       </section>
     </main>
   );
@@ -278,10 +278,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
   }, [location.pathname]);
 
   const routeSnapshot = useMemo<OverviewSnapshot | null>(() => snapshot, [snapshot]);
-  const returnTo = `${location.pathname}${location.search}`;
-
   if (authenticationFailure !== null) {
-    return <AuthenticationShell status={authenticationFailure.status} message={authenticationFailure.message} returnTo={returnTo} />;
+    return <AuthenticationShell status={authenticationFailure.status} message={authenticationFailure.message} />;
   }
   if (session === null) {
     return <main className="authentication-shell" id="main-content"><LoadingShell /></main>;

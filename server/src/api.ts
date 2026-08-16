@@ -9,7 +9,7 @@ import { IncidentRequestError } from "./incidents";
 import { LogRequestError, type LogReader } from "./logs";
 import { PerformanceRequestError } from "./prometheus";
 import type { TopologyReader } from "./topology";
-import { AuthenticationError, type AuthenticatedSession, type LoginCompletion, type LoginStart, type LogoutResult } from "./auth";
+import { AuthenticationError, type AuthenticatedSession, type LogoutResult } from "./auth";
 
 export interface InventoryReader {
   getInventory(environment: string): Promise<InventorySnapshot>;
@@ -35,10 +35,8 @@ export interface AuthenticatedIncidentOperations {
 
 export interface WorkspaceAuthentication {
   readonly publicOrigin: string;
-  startLogin(returnTo: string): Promise<LoginStart>;
-  completeLoginQuery(search: string, cookieHeader: string | null): Promise<LoginCompletion>;
-  authenticate(cookieHeader: string | null): Promise<AuthenticatedSession>;
-  logout(cookieHeader: string | null): Promise<LogoutResult>;
+  authenticate(assertionHeader: string | null): Promise<AuthenticatedSession>;
+  recordLogout(user: SessionUser): LogoutResult;
   recordAuthorizationDenied(user: SessionUser, action: string, reasonCode: string): void;
   listAudit(limit: number): readonly AuthenticationAuditEvent[];
 }
@@ -92,9 +90,8 @@ function jsonResponse(status: number, body: unknown, headOnly: boolean, extraHea
   return new Response(headOnly ? null : serialized, { status, headers });
 }
 
-function redirectResponse(status: 302 | 303, location: string, cookies: readonly string[] = []): Response {
+function redirectResponse(status: 303, location: string): Response {
   const headers = responseHeaders({ Location: location, "Content-Length": "0" });
-  for (const cookie of cookies) headers.append("Set-Cookie", cookie);
   return new Response(null, { status, headers });
 }
 
@@ -324,33 +321,6 @@ function authError(cause: unknown, headOnly: boolean): Response {
   return jsonResponse(503, errorBody("authentication_unavailable", "Authentication could not be completed."), headOnly);
 }
 
-async function handleAuthenticationRoute(request: Request, authentication: WorkspaceAuthentication, url: URL): Promise<Response | null> {
-  if (!url.pathname.startsWith("/auth/")) return null;
-  try {
-    if (url.pathname === "/auth/login") {
-      if (request.method !== "GET") return jsonResponse(405, errorBody("method_not_allowed", "Only GET is supported for login."), false, { Allow: "GET" });
-      const unexpected = [...url.searchParams.keys()].find((parameter) => parameter !== "returnTo");
-      if (unexpected !== undefined || url.searchParams.getAll("returnTo").length > 1) return jsonResponse(400, errorBody("invalid_parameter", "Login accepts one returnTo parameter."), false);
-      const login = await authentication.startLogin(url.searchParams.get("returnTo") ?? "/");
-      return redirectResponse(302, login.authorizationUrl, [login.transactionCookie]);
-    }
-    if (url.pathname === "/auth/callback") {
-      if (request.method !== "GET") return jsonResponse(405, errorBody("method_not_allowed", "Only GET is supported for the identity callback."), false, { Allow: "GET" });
-      const completion = await authentication.completeLoginQuery(url.search, request.headers.get("cookie"));
-      return redirectResponse(303, completion.returnTo, [completion.clearTransactionCookie, completion.sessionCookie]);
-    }
-    if (url.pathname === "/auth/logout") {
-      if (request.method !== "POST") return jsonResponse(405, errorBody("method_not_allowed", "Only POST is supported for logout."), false, { Allow: "POST" });
-      if (!mutationOriginIsValid(request, authentication)) return jsonResponse(403, errorBody("csrf_rejected", "The request origin is not allowed."), false);
-      const logout = await authentication.logout(request.headers.get("cookie"));
-      return redirectResponse(303, logout.redirectTo, [logout.clearSessionCookie]);
-    }
-    return jsonResponse(404, errorBody("not_found", "The requested authentication route does not exist."), request.method === "HEAD");
-  } catch (cause: unknown) {
-    return authError(cause, request.method === "HEAD");
-  }
-}
-
 export async function handleWorkspaceRequest(
   request: Request,
   authentication: WorkspaceAuthentication,
@@ -363,21 +333,33 @@ export async function handleWorkspaceRequest(
   const url = new URL(request.url);
   const headOnly = request.method === "HEAD";
   if (url.pathname === "/healthz") return handleInventoryRequest(request, reader, performanceReader, topologyReader, undefined, logReader);
-  const authenticationRoute = await handleAuthenticationRoute(request, authentication, url);
-  if (authenticationRoute !== null) return authenticationRoute;
-  if (!url.pathname.startsWith("/api/v1/")) return jsonResponse(404, errorBody("not_found", "The requested route does not exist."), headOnly);
+  const logoutRoute = url.pathname === "/auth/logout";
+  if (!url.pathname.startsWith("/api/v1/") && !logoutRoute) return jsonResponse(404, errorBody("not_found", "The requested route does not exist."), headOnly);
 
   let session: AuthenticatedSession;
   try {
-    session = await authentication.authenticate(request.headers.get("cookie"));
+    session = await authentication.authenticate(request.headers.get("cf-access-jwt-assertion"));
   } catch (cause: unknown) {
     return authError(cause, headOnly);
+  }
+
+  if (logoutRoute) {
+    if (request.method !== "POST") return jsonResponse(405, errorBody("method_not_allowed", "Only POST is supported for logout."), false, { Allow: "POST" });
+    if (!mutationOriginIsValid(request, authentication)) {
+      authentication.recordAuthorizationDenied(session.user, "auth.logout", "csrf_rejected");
+      return jsonResponse(403, errorBody("csrf_rejected", "The request origin is not allowed."), false);
+    }
+    try {
+      return redirectResponse(303, authentication.recordLogout(session.user).redirectTo);
+    } catch (cause: unknown) {
+      return authError(cause, false);
+    }
   }
 
   if (url.pathname === "/api/v1/session") {
     if (request.method !== "GET" && !headOnly) return jsonResponse(405, errorBody("method_not_allowed", "Only GET and HEAD are supported for the session endpoint."), false, { Allow: "GET, HEAD" });
     if ([...url.searchParams.keys()].length > 0) return jsonResponse(400, errorBody("invalid_parameter", "The session endpoint does not accept query parameters."), headOnly);
-    return jsonResponse(200, { apiVersion: 1, authenticated: true, user: session.user, expiresAt: session.expiresAt, idleExpiresAt: session.idleExpiresAt }, headOnly);
+    return jsonResponse(200, { apiVersion: 1, authenticated: true, user: session.user, expiresAt: session.expiresAt }, headOnly);
   }
 
   if (url.pathname === "/api/v1/auth-check") {
@@ -438,7 +420,7 @@ export function createInventoryHttpServer(authentication: WorkspaceAuthenticatio
       const method = safeNodeRequestMethod(incoming.method);
       const body = Buffer.concat(chunks);
       const headers = new Headers();
-      for (const name of ["accept", "content-type", "cookie", "origin", "sec-fetch-site"] as const) {
+      for (const name of ["accept", "content-type", "cf-access-jwt-assertion", "origin", "sec-fetch-site"] as const) {
         const value = incoming.headers[name];
         if (typeof value === "string") headers.set(name, value);
       }

@@ -81,7 +81,7 @@ export interface IncidentAuditEvent {
 }
 
 export interface IncidentOperator extends SessionUser {
-  readonly identityMode: "authenticated-session";
+  readonly identityMode: "cloudflare-access";
 }
 
 export interface IncidentNotificationStatus {

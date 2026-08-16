@@ -22,27 +22,14 @@ export interface IncidentRuntimeConfig {
 
 export interface AuthenticationRuntimeConfig {
   readonly publicOrigin: string;
-  readonly redirectUri: string;
-  readonly postLogoutRedirectUri: string;
-  readonly issuerUrl: string;
-  readonly clientId: string;
-  readonly clientSecretFile: string;
-  readonly sessionDatabasePath: string;
-  readonly sessionKeyringFile: string;
-  readonly scopes: readonly string[];
-  readonly roleClaim: string;
-  readonly displayNameClaim: string;
-  readonly groups: {
-    readonly viewer: string;
-    readonly operator: string;
-    readonly administrator: string;
-  };
-  readonly idleSeconds: number;
-  readonly absoluteSeconds: number;
-  readonly transactionSeconds: number;
+  readonly teamDomain: string;
+  readonly audience: string;
+  readonly roleMappingFile: string;
+  readonly auditDatabasePath: string;
   readonly auditRetentionDays: number;
   readonly auditMaxRecords: number;
   readonly clockToleranceSeconds: number;
+  readonly maxTokenLifetimeSeconds: number;
   readonly timeoutSeconds: number;
 }
 
@@ -137,26 +124,23 @@ function httpsOrigin(environment: Environment): string {
   return raw;
 }
 
-function claimPath(environment: Environment, name: string, fallback: string): string {
-  const value = printable(environment, name, fallback, 256);
-  if (!/^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*$/u.test(value)) throw new Error(`${name} must be a dot-separated claim path`);
+function accessTeamDomain(environment: Environment): string {
+  const value = httpsUrl(environment, "CLOUDFLARE_ACCESS_TEAM_DOMAIN");
+  const url = new URL(value);
+  if (url.origin !== value || url.pathname !== "/" || !url.hostname.endsWith(".cloudflareaccess.com")) {
+    throw new Error("CLOUDFLARE_ACCESS_TEAM_DOMAIN must be an HTTPS cloudflareaccess.com origin");
+  }
   return value;
 }
 
-function scopes(environment: Environment): readonly string[] {
-  const raw = printable(environment, "OIDC_SCOPES", "", 512);
-  const values = raw.split(/\s+/u);
-  if (!values.includes("openid") || new Set(values).size !== values.length || values.some((value) => !/^[A-Za-z0-9._:-]{1,64}$/u.test(value))) {
-    throw new Error("OIDC_SCOPES must contain unique safe scope names including openid");
-  }
-  return values;
+function accessAudience(environment: Environment): string {
+  const value = printable(environment, "CLOUDFLARE_ACCESS_AUDIENCE", "", 256);
+  if (!/^[A-Za-z0-9_-]{16,256}$/u.test(value)) throw new Error("CLOUDFLARE_ACCESS_AUDIENCE must be a safe 16 to 256 character identifier");
+  return value;
 }
 
 export function parseRuntimeConfig(environment: Environment): RuntimeConfig {
   const publicOrigin = httpsOrigin(environment);
-  const idleSeconds = integer(environment, "AUTH_SESSION_IDLE_SECONDS", 3600, 60, 86_400);
-  const absoluteSeconds = integer(environment, "AUTH_SESSION_ABSOLUTE_SECONDS", 43_200, 300, 604_800);
-  if (idleSeconds >= absoluteSeconds) throw new Error("AUTH_SESSION_IDLE_SECONDS must be shorter than AUTH_SESSION_ABSOLUTE_SECONDS");
   return {
     port: integer(environment, "INVENTORY_PORT", 3001, 1, 65_535),
     catalogPath: nonempty(environment, "CATALOG_PATH", "catalog/services.json"),
@@ -180,28 +164,15 @@ export function parseRuntimeConfig(environment: Environment): RuntimeConfig {
     },
     authentication: {
       publicOrigin,
-      redirectUri: `${publicOrigin}/auth/callback`,
-      postLogoutRedirectUri: `${publicOrigin}/`,
-      issuerUrl: httpsUrl(environment, "OIDC_ISSUER_URL"),
-      clientId: printable(environment, "OIDC_CLIENT_ID", "", 256),
-      clientSecretFile: persistentPath(environment, "OIDC_CLIENT_SECRET_FILE"),
-      sessionDatabasePath: persistentPath(environment, "AUTH_SESSION_DATABASE_PATH"),
-      sessionKeyringFile: persistentPath(environment, "AUTH_SESSION_KEYRING_FILE"),
-      scopes: scopes(environment),
-      roleClaim: claimPath(environment, "OIDC_ROLE_CLAIM", ""),
-      displayNameClaim: claimPath(environment, "OIDC_DISPLAY_NAME_CLAIM", ""),
-      groups: {
-        viewer: printable(environment, "OIDC_VIEWER_GROUP", "", 256),
-        operator: printable(environment, "OIDC_OPERATOR_GROUP", "", 256),
-        administrator: printable(environment, "OIDC_ADMINISTRATOR_GROUP", "", 256)
-      },
-      idleSeconds,
-      absoluteSeconds,
-      transactionSeconds: integer(environment, "AUTH_TRANSACTION_SECONDS", 600, 60, 1800),
+      teamDomain: accessTeamDomain(environment),
+      audience: accessAudience(environment),
+      roleMappingFile: persistentPath(environment, "CLOUDFLARE_ACCESS_ROLE_MAPPING_FILE"),
+      auditDatabasePath: persistentPath(environment, "AUTH_AUDIT_DATABASE_PATH"),
       auditRetentionDays: integer(environment, "AUTH_AUDIT_RETENTION_DAYS", 180, 1, 3650),
       auditMaxRecords: integer(environment, "AUTH_AUDIT_MAX_RECORDS", 100_000, 100, 1_000_000),
-      clockToleranceSeconds: integer(environment, "OIDC_CLOCK_TOLERANCE_SECONDS", 60, 0, 120),
-      timeoutSeconds: integer(environment, "OIDC_TIMEOUT_SECONDS", 5, 1, 30)
+      clockToleranceSeconds: integer(environment, "CLOUDFLARE_ACCESS_CLOCK_TOLERANCE_SECONDS", 30, 0, 120),
+      maxTokenLifetimeSeconds: integer(environment, "CLOUDFLARE_ACCESS_MAX_TOKEN_LIFETIME_SECONDS", 86_400, 60, 2_592_000),
+      timeoutSeconds: integer(environment, "CLOUDFLARE_ACCESS_JWKS_TIMEOUT_SECONDS", 5, 1, 30)
     },
     kubernetes: {
       apiUrl: httpUrl(environment, "KUBERNETES_API_URL", "https://host.docker.internal:6443"),

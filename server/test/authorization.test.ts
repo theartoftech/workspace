@@ -6,8 +6,6 @@ import type { IncidentDetailResponse, IncidentListResponse } from "../../shared/
 import {
   AuthenticationError,
   type AuthenticatedSession,
-  type LoginCompletion,
-  type LoginStart,
   type LogoutResult
 } from "../src/auth";
 import { handleWorkspaceRequest, type IncidentOperations, type InventoryReader, type WorkspaceAuthentication } from "../src/api";
@@ -34,7 +32,7 @@ const incidentList = {
   summary: { total: 0, active: 0, resolved: 0, unacknowledged: 0, silenced: 0 },
   alertSource: { name: "inventory-health-evaluator", availability: "available", evaluatedAt: "2026-08-16T12:00:00.000Z", message: null },
   notification: { state: "unconfigured", message: "No destinations." },
-  operator: { id: "oidc:operator", displayName: "Lab Operator", role: "operator", identityMode: "authenticated-session" },
+  operator: { id: "access:operator", displayName: "Lab Operator", role: "operator", identityMode: "cloudflare-access" },
   incidents: []
 } as const satisfies IncidentListResponse;
 const incidentOperations: IncidentOperations = {
@@ -45,9 +43,9 @@ const incidentOperations: IncidentOperations = {
 };
 
 const users = {
-  viewer: { id: "oidc:viewer", displayName: "View Only", role: "viewer" },
-  operator: { id: "oidc:operator", displayName: "Lab Operator", role: "operator" },
-  administrator: { id: "oidc:administrator", displayName: "Lab Admin", role: "administrator" }
+  viewer: { id: "access:viewer", displayName: "View Only", role: "viewer" },
+  operator: { id: "access:operator", displayName: "Lab Operator", role: "operator" },
+  administrator: { id: "access:administrator", displayName: "Lab Admin", role: "administrator" }
 } as const satisfies Readonly<Record<string, SessionUser>>;
 
 class FakeAuthentication implements WorkspaceAuthentication {
@@ -55,35 +53,20 @@ class FakeAuthentication implements WorkspaceAuthentication {
   user: SessionUser | null = users.operator;
   denied: Array<{ readonly user: SessionUser; readonly action: string; readonly reason: string }> = [];
   authenticationFailure: Error | null = null;
-  loginFailure: Error | null = null;
   auditFailure: Error | null = null;
   audit: readonly AuthenticationAuditEvent[] = [{
     id: 1, createdAt: "2026-08-16T12:00:00.000Z", actorId: users.administrator.id, displayName: users.administrator.displayName,
-    action: "login_succeeded", outcome: "succeeded", reasonCode: "oidc_callback_validated", metadata: { role: "administrator" }
+    action: "identity_validated", outcome: "succeeded", reasonCode: "cloudflare_access_jwt_validated", metadata: { role: "administrator" }
   }];
-
-  startLogin(): Promise<LoginStart> {
-    if (this.loginFailure !== null) return Promise.reject(this.loginFailure);
-    return Promise.resolve({ authorizationUrl: "https://identity.example.test/authorize", transactionCookie: "__Host-workspace_oidc=transaction; Secure; HttpOnly; SameSite=Lax" });
-  }
-
-  completeLoginQuery(): Promise<LoginCompletion> {
-    return Promise.resolve({
-      user: users.operator,
-      sessionCookie: "__Host-workspace_session=session; Secure; HttpOnly; SameSite=Lax",
-      clearTransactionCookie: "__Host-workspace_oidc=; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
-      returnTo: "/incidents"
-    });
-  }
 
   authenticate(): Promise<AuthenticatedSession> {
     if (this.authenticationFailure !== null) return Promise.reject(this.authenticationFailure);
     if (this.user === null) return Promise.reject(new AuthenticationError(401, "authentication_required", "Authentication is required."));
-    return Promise.resolve({ user: this.user, expiresAt: "2026-08-17T00:00:00.000Z", idleExpiresAt: "2026-08-16T13:00:00.000Z" });
+    return Promise.resolve({ user: this.user, expiresAt: "2026-08-17T00:00:00.000Z" });
   }
 
-  logout(): Promise<LogoutResult> {
-    return Promise.resolve({ clearSessionCookie: "__Host-workspace_session=; Max-Age=0; Secure; HttpOnly; SameSite=Lax", redirectTo: "https://monitor.jefferyhaynes.net/", providerLogoutAvailable: false });
+  recordLogout(): LogoutResult {
+    return { redirectTo: "/cdn-cgi/access/logout" };
   }
 
   recordAuthorizationDenied(user: SessionUser, action: string, reason: string): void {
@@ -120,8 +103,7 @@ describe("server-side authentication and authorization boundary", () => {
       apiVersion: 1,
       authenticated: true,
       user: users.operator,
-      expiresAt: "2026-08-17T00:00:00.000Z",
-      idleExpiresAt: "2026-08-16T13:00:00.000Z"
+      expiresAt: "2026-08-17T00:00:00.000Z"
     });
     expect(JSON.stringify(body)).not.toMatch(/issuer|subject|group|token|claim/iu);
   });
@@ -168,36 +150,25 @@ describe("server-side authentication and authorization boundary", () => {
     expect((await request("/api/v1/auth/audit?limit=101", authentication)).status).toBe(400);
   });
 
-  it("handles login, callback, and local-first logout without exposing provider tokens", async () => {
+  it("starts Cloudflare logout only for an authenticated same-origin request", async () => {
     const authentication = new FakeAuthentication();
-    const login = await request("/auth/login?returnTo=%2Fincidents", authentication);
-    expect(login.status).toBe(302);
-    expect(login.headers.get("location")).toBe("https://identity.example.test/authorize");
-    expect(login.headers.get("set-cookie")).toContain("__Host-workspace_oidc=");
-
-    const callback = await request("/auth/callback?code=one-use&state=bound", authentication, { headers: { Cookie: "__Host-workspace_oidc=transaction" } });
-    expect(callback.status).toBe(303);
-    expect(callback.headers.get("location")).toBe("/incidents");
-    expect(callback.headers.getSetCookie()).toHaveLength(2);
-
     const logout = await request("/auth/logout", authentication, {
       method: "POST",
-      headers: { Cookie: "__Host-workspace_session=session", Origin: authentication.publicOrigin, "Sec-Fetch-Site": "same-origin" }
+      headers: { Origin: authentication.publicOrigin, "Sec-Fetch-Site": "same-origin" }
     });
     expect(logout.status).toBe(303);
-    expect(logout.headers.get("location")).toBe(authentication.publicOrigin + "/");
-    expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(logout.headers.get("location")).toBe("/cdn-cgi/access/logout");
+    expect(logout.headers.get("set-cookie")).toBeNull();
 
-    expect((await request("/auth/login", authentication, { method: "HEAD" })).status).toBe(405);
-    expect((await request("/auth/callback?code=x&state=y", authentication, { method: "HEAD" })).status).toBe(405);
-  });
-
-  it("rejects malformed authentication routes and reports internal auth failures generically", async () => {
-    const authentication = new FakeAuthentication();
-    expect((await request("/auth/login?unexpected=1", authentication)).status).toBe(400);
-    expect((await request("/auth/login?returnTo=%2F&returnTo=%2Flogs", authentication)).status).toBe(400);
     expect((await request("/auth/logout", authentication)).status).toBe(405);
     expect((await request("/auth/logout", authentication, { method: "POST" })).status).toBe(403);
+    expect(authentication.denied.at(-1)).toEqual({ user: users.operator, action: "auth.logout", reason: "csrf_rejected" });
+  });
+
+  it("rejects obsolete authentication routes and reports internal auth failures generically", async () => {
+    const authentication = new FakeAuthentication();
+    expect((await request("/auth/login", authentication)).status).toBe(404);
+    expect((await request("/auth/callback?code=must-not-be-consumed", authentication)).status).toBe(404);
     expect((await request("/auth/not-a-route", authentication)).status).toBe(404);
     expect((await request("/not-an-api-route", authentication)).status).toBe(404);
 
@@ -221,10 +192,5 @@ describe("server-side authentication and authorization boundary", () => {
     expect(sessionUnavailable.status).toBe(503);
     expect(await sessionUnavailable.text()).not.toContain("session store detail");
 
-    authentication.authenticationFailure = null;
-    authentication.loginFailure = new Error("discovery detail must not leak");
-    const loginUnavailable = await request("/auth/login", authentication);
-    expect(loginUnavailable.status).toBe(503);
-    expect(await loginUnavailable.text()).not.toContain("discovery detail");
   });
 });

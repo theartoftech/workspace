@@ -520,7 +520,7 @@ export class SqliteIncidentRepository {
       apiVersion: 1,
       assembledAt: now,
       notification,
-      operator: { ...operator, identityMode: "authenticated-session" },
+      operator: { ...operator, identityMode: "cloudflare-access" },
       incident: this.summary(this.incidentRow(internalId), now),
       audit: this.audit(internalId)
     };
@@ -649,7 +649,7 @@ export class IncidentOperationsService {
         },
         alertSource: this.alertSource,
         notification,
-        operator: { ...operator, identityMode: "authenticated-session" },
+        operator: { ...operator, identityMode: "cloudflare-access" },
         incidents
       };
     });

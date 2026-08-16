@@ -1,105 +1,95 @@
-# ADR 0007: Direct OIDC identity and server-side role enforcement
+# ADR 0007: Validated Cloudflare Access identity and server-side role enforcement
 
-- Status: Accepted and implemented locally; provider registration, deployment, and human acceptance pending
+- Status: Accepted and implemented locally; deployment and human acceptance pending
 - Date: 2026-08-16
 - Sprint: 7 — Enterprise identity and access
 
 ## Context
 
-Workspace Monitor previously relied on Cloudflare Access as an external perimeter and attributed every incident mutation to one configured lab actor. That model could not prove which person performed an operation, distinguish read-only users from operators, or enforce application roles at the API boundary. Cloudflare configuration and identity-provider administration are outside this repository, and unvalidated forwarding headers must not become application identity.
+Cloudflare Access already authenticates users before the `monitor.jefferyhaynes.net` tunnel sends requests to the loopback-only portal. CPQ Demo and CPQ Test have separate Keycloak instances for their own applications; they are not Workspace Monitor identity providers and remain private to those environments.
+
+The deployed Sprint 6 application still attributes incident commands to one configured lab actor. Trusting an unsigned forwarding header would not establish an individual identity or role, but creating a second direct-OIDC login would duplicate the existing Access login and require an unnecessary public Keycloak endpoint.
 
 ## Decision
 
-Workspace Monitor uses direct OIDC Authorization Code flow with PKCE S256. The Node operations API performs discovery, authorization, callback validation, token refresh, UserInfo retrieval, session validation, and logout. It validates state, nonce, the exact callback URI, the PKCE verifier, issuer, subject, token expiry, and the configured role and display-name claims. It requires a refresh token so that a long-running browser session can revalidate identity and role rather than trusting stale claims.
+Workspace Monitor consumes the `Cf-Access-Jwt-Assertion` header added by Cloudflare Access and validates it cryptographically on every protected request. The Node API:
 
-The provider registration must support:
+- downloads rotating signing keys only from `https://<approved-team>.cloudflareaccess.com/cdn-cgi/access/certs`;
+- accepts only `RS256` application tokens;
+- validates the exact approved issuer and Workspace Monitor application audience;
+- validates signature, expiry, not-before time, bounded clock skew, issue time, and maximum token lifetime;
+- requires non-empty `sub` and verified `email` claims;
+- rejects organization tokens, service tokens, malformed assertions, and unsupported algorithms;
+- never uses the `CF_Authorization` cookie, a browser payload, or an unvalidated forwarding field as identity.
 
-- exact redirect URI `https://monitor.jefferyhaynes.net/auth/callback`;
-- post-logout return URI `https://monitor.jefferyhaynes.net/` when provider logout is supported;
-- Authorization Code flow, PKCE S256, `client_secret_basic`, ID tokens, refresh tokens, and UserInfo;
-- the explicitly approved `openid`-including scope set;
-- an explicitly selected display-name claim and a group-valued role claim.
-
-No issuer, client registration, scope set, claim path, or group name is inferred. The runtime must provide distinct exact mappings for Viewer, Operator, and Administrator. If multiple approved groups are present, the highest matching role wins. An identity with no approved group is denied.
+Cloudflare authentication lifecycle, session cookies, policy, tunnel, DNS, and identity-provider configuration remain external. Workspace Monitor implements no OIDC callback, client secret, refresh token, application session cookie, or Keycloak dependency. `/auth/logout` validates the current Access assertion and same-origin browser evidence, audits the action, and redirects to `/cdn-cgi/access/logout`.
 
 ## Authorization model
+
+The validated email is matched case-insensitively against one exact entry in a host-provisioned role-mapping file. Wildcards, domain-wide grants, duplicate emails, unknown roles, and unmapped users are rejected. The mapping also supplies a bounded non-sensitive display name. The public actor ID is an opaque hash derived from the validated Access issuer and subject; raw subject and email claims are not returned to the browser or written to audit.
 
 | Role | Server-authorized capability |
 | --- | --- |
 | Viewer | Read protected monitoring evidence and incident history |
-| Operator | Viewer access plus approved incident declarations and transitions |
+| Operator | Viewer access plus existing approved incident declarations and transitions |
 | Administrator | Operator access plus the bounded authentication-audit API |
 
-There are no general settings, identity, retention, integration, or user-administration mutations in Sprint 7. Administrator does not implicitly authorize an operation that the server has not implemented. Every incident mutation receives its actor ID, display name, and role from the validated session. Browser-supplied actor or role fields are rejected, and UI hiding is only a usability affordance.
+Administrator does not imply unimplemented identity, settings, integration, retention, or user-management powers. Every mutation derives actor and role from the newly validated request assertion. UI hiding remains only a usability affordance.
 
-## Session and key management
+## Runtime and audit state
 
-The browser receives only an opaque `__Host-` session cookie. OIDC tokens, provider claims, refresh tokens, state, nonce, and PKCE verifier remain server-side. Authentication transactions and sessions are stored in a dedicated SQLite database using AES-256-GCM encrypted payloads and keyed hashes for opaque identifiers. The database persists across container replacement and restart; it is separate from incident history and is forced to mode `0600`.
+The role mapping is a regular file owned by UID/GID `10001` with mode `0400`, mounted individually at `/run/secrets/cloudflare_access_roles`. It is excluded from Git and deployment archives because it contains personal identity mappings and security policy. The non-secret Access team domain and application audience are stored in the host runtime `.env`.
 
-The session keyring is a host-provisioned, mode-`0400`, UID/GID `10001` file. It contains one active 32-byte key and, during rotation, at most one previous key. New records use the active key; retaining the immediately previous key permits existing sessions and transactions to survive a controlled rotation and restart. Retiring a key invalidates records encrypted or hashed with it. The default bounds are:
+Authentication and authorization audit history persists in `auth.sqlite`, separate from incident state. It records the opaque actor, configured display name, action, outcome, bounded reason code, and safe metadata. It never records assertions, cookies, email claims, subjects, signing keys, raw provider errors, or protected evidence. Repeated requests using one assertion produce one in-process validation-success audit record; denials, logout, and authorization failures remain explicit. Audit is capped by age and record count.
 
-- login transaction: 10 minutes and one use;
-- idle session: 60 minutes;
-- absolute session: 12 hours;
-- OIDC clock tolerance: 60 seconds;
-- authentication audit: 180 days and 100,000 records, whichever cap is reached first.
+## Reverse-proxy boundary
 
-Identity is refreshed when the current provider token lifetime expires. Refresh-token rotation is persisted atomically for the session, and concurrent refreshes for one session are coalesced in-process. A rejected refresh, subject/issuer mismatch, expired response, or lost role revokes the session. Provider unavailability returns `503` and never extends the session or restores the old configured actor.
+Nginx explicitly forwards `Cf-Access-Jwt-Assertion` to the API and its internal authentication subrequest. Pages, static assets, APIs, incident data, and proxied Gatus tools require a validated assertion. `/healthz` remains the only public origin route. The loopback verifier proves missing assertions fail with `401`; through the public hostname Cloudflare Access normally intercepts anonymous users before the origin.
 
-## Browser and reverse-proxy boundary
-
-All pages, assets, monitoring APIs, and same-origin Gatus proxy routes are protected. `/healthz`, `/auth/login`, `/auth/callback`, and the local logout command are the only authentication bootstrap exceptions. Anonymous pages redirect to login; protected data and tool endpoints return `401` without evidence. The safe session endpoint exposes only the derived user ID, display name, role, and bounded expiry timestamps.
-
-Incident mutations require both an authenticated Operator-or-higher session and exact same-origin browser evidence: `Origin` must equal the configured public origin and `Sec-Fetch-Site` must be `same-origin`. Session cookies are `Secure`, `HttpOnly`, `SameSite=Lax`, use the `__Host-` prefix, and cannot be selected by browser payloads. Successful login rotates from the one-use transaction cookie to a new session identifier. Return paths are limited to known Workspace Monitor routes and service-detail paths, which rejects absolute, scheme-relative, backslash, encoded, fragment, and unknown-route redirects.
-
-Nginx disables callback access logging and raises callback error logging to critical so authorization codes do not enter local proxy logs. The external Cloudflare request-log policy is outside this repository and must be reviewed before deployment because the OIDC response uses a callback query string.
-
-Cloudflare Access remains an independently managed perimeter. Workspace Monitor does not consume or trust Cloudflare Access identity headers, and the repository does not modify Access policy, tunnel, DNS, or provider configuration.
+Incident mutations additionally require `Origin` to equal `https://monitor.jefferyhaynes.net` and `Sec-Fetch-Site` to equal `same-origin`. The tunnel remains bound to `127.0.0.1:3100`, limiting direct-origin access. JWT validation is still mandatory and prevents a local caller from gaining identity by fabricating the header.
 
 ## Failure behavior
 
 | Condition | Result |
 | --- | --- |
-| No, malformed, revoked, retired-key, idle-expired, or absolute-expired session | `401`, no protected evidence |
-| Valid user without the required role | `403`, authorization denial audited |
+| Missing assertion | `401`, no protected evidence |
+| Malformed, expired, premature, incorrectly signed, wrong-issuer, wrong-audience, wrong-type, or excessive-lifetime assertion | `401`, bounded error |
+| Service or organization assertion | `401`, invalid identity |
+| Valid user assertion without an exact role mapping | `403`, role not authorized |
+| Signing-key endpoint timeout or transport failure | `503`, no fallback identity |
+| Viewer incident mutation or non-administrator audit request | `403`, authorization denial audited |
 | Missing or cross-site mutation origin evidence | `403`, authorization denial audited |
-| Invalid/replayed state, nonce, PKCE, callback, issuer, subject, or signature | `401`, login/session fails closed |
-| Provider timeout, discovery outage, or temporary provider error | `503`, no fallback identity |
-| Missing/invalid issuer, client, mapping, secret, keyring, or persistent database configuration | API startup or deployment preflight fails explicitly |
-| Provider logout unavailable | Local session is still revoked and the cookie is cleared |
+| Missing/invalid team domain, audience, mapping file, or audit database configuration | preflight or API startup fails explicitly |
 
-Errors use bounded application codes and messages. They do not expose tokens, cookies, provider responses, client secrets, claims, state, nonce, PKCE values, upstream URLs, or raw authorization failures. Authentication audit records contain the derived actor, action, outcome, reason code, and capped safe metadata only. Incident audit remains the authoritative history for successful incident state changes.
+Failures never expose JWTs, cookies, signing keys, claim values, upstream URLs, provider bodies, or protected monitoring evidence. Provider unavailability never restores the Sprint 6 configured actor.
 
 ## Measurable acceptance criteria
 
-- Anonymous requests cannot access any page, static asset, monitoring evidence API, incident API, or proxied source tool.
-- Authenticated Viewers can read evidence and cannot invoke incident mutations.
-- Operators can perform only the existing approved incident mutations.
-- Administrators can perform Operator actions and read the bounded authentication audit; no unimplemented administrative power is implied.
-- Every incident mutation derives actor identity and role from a validated session; actor/role payload fields are rejected.
-- Expired, revoked, malformed, replayed, incorrectly signed, wrong-subject, wrong-issuer, and retired-key sessions fail closed.
-- State, nonce, PKCE, callback, and safe return-path tampering is rejected.
-- Provider outage never grants access, refreshes expiry, or restores the legacy configured actor.
-- Authentication and authorization failures are audited without secrets; successful incident mutations retain authenticated attribution in incident audit.
-- The server test suite covers representative and adversarial identity paths and retains at least 90% coverage.
-- Deployment verification proves anonymous fail-closed behavior, and human acceptance separately proves each configured role through the public origin.
+- Anonymous direct-origin requests cannot access pages, assets, monitoring APIs, incidents, logs, or proxied tools.
+- A correctly signed Access application JWT for the exact issuer and audience yields only the configured display name, opaque actor ID, role, and expiry.
+- Wrong-key, wrong-audience, wrong-issuer, expired, premature, oversized, service, organization, malformed, and unmapped assertions fail closed.
+- Viewers can read evidence and cannot mutate incidents; Operators can perform only existing incident commands; Administrators additionally read bounded authentication audit.
+- Every successful incident mutation is attributed to the validated Access identity; browser actor and role fields remain rejected.
+- Access signing-key rotation is handled through the remote JWKS set; key-fetch failure returns `503` rather than using stale untrusted identity.
+- Cloudflare, CPQ Demo, CPQ Test, and both Keycloak instances remain unmodified.
+- Server coverage remains at least 90%, deployment verification proves anonymous fail-closed behavior, and public human acceptance proves the three role mappings.
 
 ## Required deployment decisions
 
-Implementation does not authorize deployment. Before preflight or deploy, the user must approve and provision, outside Git:
+Before preflight or deploy, approve and provision outside Git:
 
-1. the exact OIDC provider and HTTPS issuer;
-2. the client registration, client ID, client secret, redirect/logout URIs, and required provider capabilities;
-3. the exact scope set, display-name claim, group claim, and three distinct group mappings;
-4. ownership of key generation, secure transfer, rotation, retirement, emergency revocation, database backup, and provider-client-secret rotation;
-5. external callback-query logging behavior at Cloudflare and the provider;
-6. the human acceptance identities used to prove Viewer, Operator, and Administrator behavior.
+1. the exact Cloudflare Access team domain and existing Workspace Monitor application audience tag;
+2. exact Viewer, Operator, and Administrator email-to-display-name mappings, with dedicated acceptance identities;
+3. ownership, secure transfer, replacement, rollback, and emergency removal of the role-mapping file;
+4. the maximum accepted Access token lifetime aligned with the existing application session policy;
+5. encrypted backup and retention handling for `auth.sqlite`;
+6. explicit deployment authorization and public human acceptance.
 
-The client secret and session keyring must be installed as individual runtime files owned by UID/GID `10001` with mode `0400`. They must never enter Git, deployment archives, environment variables, browser responses, screenshots, audit metadata, or command output.
+Repository scripts do not read Cloudflare credentials and never create or modify Access applications, policies, tunnels, DNS, identity providers, CPQ, or Keycloak.
 
 ## Consequences
 
-- Workspace Monitor now has a fail-closed application identity boundary independent of the external perimeter.
-- Persistent sessions survive normal restarts and controlled one-key rotation, while explicit revocation and role loss take effect server-side.
-- Provider availability becomes a dependency for login and periodic identity revalidation.
-- Exact provider, mapping, key custody, callback-log, deployment, and human-acceptance decisions remain operator gates rather than repository defaults.
+- Workspace Monitor reuses the existing login boundary without exposing either Keycloak instance or adding another hostname.
+- Role changes require an atomic role-mapping replacement and `inventory-api` restart; the next request then uses the new mapping.
+- Access availability and its signing-key endpoint are authentication dependencies.
+- Cloudflare owns login/session/revocation behavior, while Workspace Monitor owns cryptographic validation, role enforcement, incident attribution, and bounded application audit.

@@ -28,8 +28,8 @@ describe("enterprise application shell", () => {
 
     render(<MemoryRouter initialEntries={["/logs?service=cpq-demo"]}><App provider={provider} /></MemoryRouter>);
 
-    expect(await screen.findByRole("heading", { name: "Authentication required" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/auth/login?returnTo=%2Flogs%3Fservice%3Dcpq-demo");
+    expect(await screen.findByRole("heading", { name: "Cloudflare Access identity required" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Sign in again" })).toHaveAttribute("href", "/cdn-cgi/access/logout");
     expect(getOverview).not.toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "Logs & events" })).not.toBeInTheDocument();
   });
@@ -42,7 +42,7 @@ describe("enterprise application shell", () => {
 
     render(<MemoryRouter><App provider={provider} /></MemoryRouter>);
 
-    expect(await screen.findByRole("heading", { name: "Identity provider unavailable" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Identity validation unavailable" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Fleet overview" })).not.toBeInTheDocument();
   });
 
@@ -52,9 +52,8 @@ describe("enterprise application shell", () => {
       getSession: () => Promise.resolve({
         apiVersion: 1,
         authenticated: true,
-        user: { id: "oidc:viewer", displayName: "Read Only", role: "viewer" },
-        expiresAt: "2026-08-17T12:00:00.000Z",
-        idleExpiresAt: "2026-08-16T13:00:00.000Z"
+        user: { id: "access:viewer", displayName: "Read Only", role: "viewer" },
+        expiresAt: "2026-08-17T12:00:00.000Z"
       })
     };
 

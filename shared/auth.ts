@@ -11,14 +11,11 @@ export interface SessionResponse {
   readonly authenticated: true;
   readonly user: SessionUser;
   readonly expiresAt: string;
-  readonly idleExpiresAt: string;
 }
 
 export type AuthenticationAuditAction =
-  | "login_succeeded"
-  | "login_failed"
-  | "session_refreshed"
-  | "session_revoked"
+  | "identity_validated"
+  | "identity_rejected"
   | "logout"
   | "authorization_denied";
 

@@ -12,7 +12,7 @@ import { IncidentRequestError, IncidentOperationsService, SqliteIncidentReposito
 import { catalogFixture } from "./fixtures";
 
 const temporaryDirectories: string[] = [];
-const operator: SessionUser = { id: "oidc:operator", displayName: "Lab Operator", role: "operator" };
+const operator: SessionUser = { id: "access:operator", displayName: "Lab Operator", role: "operator" };
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -178,7 +178,7 @@ describe("persistent incident operations", () => {
     expect(resolved.incident).toMatchObject({ status: "resolved", version: 3 });
     expect(resolved.audit.map((event) => event.action)).toEqual(["created", "acknowledged", "resolved"]);
     expect(resolved.audit.map((event) => event.actor)).toEqual([
-      "Lab Operator (oidc:operator)", "Lab Operator (oidc:operator)", "Lab Operator (oidc:operator)"
+      "Lab Operator (access:operator)", "Lab Operator (access:operator)", "Lab Operator (access:operator)"
     ]);
     current.repository.close();
   });

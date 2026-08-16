@@ -52,7 +52,7 @@ const incidentList: IncidentListResponse = {
   summary: { total: 1, active: 1, resolved: 0, unacknowledged: 1, silenced: 0 },
   alertSource: { name: "inventory-health-evaluator", availability: "available", evaluatedAt: "2026-08-14T14:00:00Z", message: null },
   notification: { state: "unconfigured", message: "No destination configured." },
-  operator: { id: "oidc:lab-operator", displayName: "Lab Operator", role: "operator", identityMode: "authenticated-session" }, incidents: [incidentSummary]
+  operator: { id: "access:lab-operator", displayName: "Lab Operator", role: "operator", identityMode: "cloudflare-access" }, incidents: [incidentSummary]
 };
 const incidentDetail: IncidentDetailResponse = {
   apiVersion: 1, assembledAt: "2026-08-14T14:00:00Z", notification: incidentList.notification, operator: incidentList.operator,
@@ -72,14 +72,11 @@ const incidentOperations: IncidentOperations = {
 };
 const workspaceAuthentication: WorkspaceAuthentication = {
   publicOrigin: "https://monitor.jefferyhaynes.net",
-  startLogin: () => Promise.resolve({ authorizationUrl: "https://identity.example.test/authorize", transactionCookie: "transaction=cookie" }),
-  completeLoginQuery: () => Promise.reject(new Error("not used")),
   authenticate: () => Promise.resolve({
-    user: { id: "oidc:operator", displayName: "Lab Operator", role: "operator" },
-    expiresAt: "2026-08-17T00:00:00.000Z",
-    idleExpiresAt: "2026-08-16T13:00:00.000Z"
+    user: { id: "access:operator", displayName: "Lab Operator", role: "operator" },
+    expiresAt: "2026-08-17T00:00:00.000Z"
   }),
-  logout: () => Promise.resolve({ clearSessionCookie: "session=; Max-Age=0", redirectTo: "https://monitor.jefferyhaynes.net/", providerLogoutAvailable: false }),
+  recordLogout: () => ({ redirectTo: "/cdn-cgi/access/logout" }),
   recordAuthorizationDenied: () => undefined,
   listAudit: () => []
 };

@@ -41,21 +41,14 @@ def write_executable(path: Path, source: str) -> None:
 def provision_identity_runtime(temporary: Path) -> tuple[str, ...]:
     secret_directory = temporary / "data" / "runtime-secrets"
     secret_directory.mkdir(parents=True, exist_ok=True)
-    (secret_directory / "oidc_client_secret").write_text("test-client-secret\n", encoding="utf-8")
-    (secret_directory / "auth_session_keyring").write_text(
-        '{"version":1,"activeKeyId":"test-key","keys":[{"id":"test-key","secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}\n',
+    (secret_directory / "cloudflare_access_roles").write_text(
+        '{"version":1,"identities":[{"email":"operator@example.test","displayName":"Lab Operator","role":"operator"}]}\n',
         encoding="utf-8",
     )
     write_executable(temporary / "stat", "#!/usr/bin/env bash\nprintf '400 10001\\n'\n")
     return (
-        "OIDC_ISSUER_URL=https://identity.example.test/realms/workspace-monitor",
-        "OIDC_CLIENT_ID=workspace-monitor",
-        "OIDC_SCOPES=openid profile",
-        "OIDC_ROLE_CLAIM=groups",
-        "OIDC_DISPLAY_NAME_CLAIM=preferred_username",
-        "OIDC_VIEWER_GROUP=/workspace-monitor/viewer",
-        "OIDC_OPERATOR_GROUP=/workspace-monitor/operator",
-        "OIDC_ADMINISTRATOR_GROUP=/workspace-monitor/administrator",
+        "CLOUDFLARE_ACCESS_TEAM_DOMAIN=https://lab.cloudflareaccess.com",
+        f"CLOUDFLARE_ACCESS_AUDIENCE={'a' * 64}",
     )
 
 
@@ -198,18 +191,14 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("INCIDENT_DATABASE_PATH: /var/lib/workspace-monitor/incidents.sqlite", api)
         self.assertNotIn("INCIDENT_OPERATOR_ID", api)
         self.assertIn("AUTH_PUBLIC_ORIGIN: ${MONITORING_PUBLIC_URL}", api)
-        self.assertIn("OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}", api)
-        self.assertIn("OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}", api)
-        self.assertIn("OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret", api)
-        self.assertIn("AUTH_SESSION_DATABASE_PATH: /var/lib/workspace-monitor/auth.sqlite", api)
-        self.assertIn("AUTH_SESSION_KEYRING_FILE: /run/secrets/auth_session_keyring", api)
-        self.assertIn("OIDC_VIEWER_GROUP: ${OIDC_VIEWER_GROUP}", api)
-        self.assertIn("OIDC_OPERATOR_GROUP: ${OIDC_OPERATOR_GROUP}", api)
-        self.assertIn("OIDC_ADMINISTRATOR_GROUP: ${OIDC_ADMINISTRATOR_GROUP}", api)
+        self.assertIn("CLOUDFLARE_ACCESS_TEAM_DOMAIN: ${CLOUDFLARE_ACCESS_TEAM_DOMAIN}", api)
+        self.assertIn("CLOUDFLARE_ACCESS_AUDIENCE: ${CLOUDFLARE_ACCESS_AUDIENCE}", api)
+        self.assertIn("CLOUDFLARE_ACCESS_ROLE_MAPPING_FILE: /run/secrets/cloudflare_access_roles", api)
+        self.assertIn("AUTH_AUDIT_DATABASE_PATH: /var/lib/workspace-monitor/auth.sqlite", api)
         self.assertIn('INCIDENT_EVALUATION_INTERVAL_SECONDS: "30"', api)
         self.assertIn("depends_on:\n      - prometheus", api)
         self.assertNotIn("runtime-secrets:/run/secrets:ro", api)
-        for secret_name in ("kubernetes_inventory_token", "oidc_client_secret", "auth_session_keyring"):
+        for secret_name in ("kubernetes_inventory_token", "cloudflare_access_roles"):
             self.assertIn(f"runtime-secrets/{secret_name}:/run/secrets/{secret_name}:ro", api)
         self.assertIn("${MONITORING_DATA_DIR}/incidents:/var/lib/workspace-monitor", api)
         self.assertIn("mem_limit: 128m", api)
@@ -249,19 +238,18 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("try_files $uri $uri/ /index.html", nginx)
         self.assertIn("location /api/", nginx)
         self.assertIn("location /auth/", nginx)
-        self.assertIn("location = /auth/callback", nginx)
-        self.assertIn("access_log off", nginx.split("location = /auth/callback", maxsplit=1)[1].split("}", maxsplit=1)[0])
         self.assertIn("location = /_auth/check", nginx)
         self.assertIn("internal", nginx.split("location = /_auth/check", maxsplit=1)[1].split("}", maxsplit=1)[0])
         self.assertIn("/api/v1/auth-check", nginx)
         self.assertGreaterEqual(nginx.count("auth_request /_auth/check"), 3)
-        self.assertIn("error_page 401 = @oidc_login", nginx)
-        self.assertIn("return 302 /auth/login", nginx)
+        self.assertNotIn("/auth/callback", nginx)
+        self.assertNotIn("error_page 401", nginx)
+        self.assertGreaterEqual(nginx.count("proxy_set_header Cf-Access-Jwt-Assertion $http_cf_access_jwt_assertion"), 3)
         self.assertIn("proxy_pass http://inventory-api:3001", nginx)
         self.assertIn("client_max_body_size 16k", nginx)
         self.assertIn("location /tools/gatus-internal/", nginx)
         self.assertIn("location /tools/gatus-public-path/", nginx)
-        self.assertNotIn("/cdn-cgi/access/logout", nginx)
+        self.assertNotIn("oidc", nginx.lower())
         self.assertIn("public, max-age=31536000, immutable", nginx)
         self.assertIn('default "no-store"', nginx)
         for header in (
@@ -589,11 +577,11 @@ exit 1
         self.assertIn("/api/v1/incidents?environment=all&status=active", source)
         self.assertIn("/api/v1/logs?environment=demo&service=cpq-demo&range=1h", source)
         self.assertIn("/tools/gatus-internal/api/v1/endpoints/statuses", source)
-        self.assertIn("Authenticated browser acceptance is required", source)
+        self.assertIn("Cloudflare Access browser acceptance is required", source)
         self.assertIn("validate_identity_credentials", source)
         self.assertIn("validate_portal_port", source)
 
-    def test_deploy_prepares_bounded_persistent_incident_and_session_storage(self) -> None:
+    def test_deploy_prepares_bounded_persistent_incident_and_auth_audit_storage(self) -> None:
         source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn('"$data_directory/incidents"', source)
@@ -663,8 +651,8 @@ count=$((count + 1))
 printf '%s' "$count" > "$MONITORING_CURL_COUNT"
 if (( count < 3 )); then exit 1; fi
 if [[ " $* " == *" --write-out "* ]]; then
-    if [[ " $* " == *"/api/v1/"* || " $* " == *"/tools/"* ]]; then printf '401';
-    else printf '302'; fi
+    if [[ " $* " == *"/auth/login"* ]]; then printf '404';
+    else printf '401'; fi
     exit 0
 fi
 if [[ " $* " == *"/tools/gatus-internal/api/v1/endpoints/statuses"* ]]; then

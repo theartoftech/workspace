@@ -4,17 +4,10 @@ import { parseRuntimeConfig } from "../src/config";
 
 const authenticationEnvironment = {
   AUTH_PUBLIC_ORIGIN: "https://monitor.jefferyhaynes.net",
-  AUTH_SESSION_DATABASE_PATH: "/var/lib/workspace-monitor/auth.sqlite",
-  AUTH_SESSION_KEYRING_FILE: "/run/secrets/auth_session_keyring",
-  OIDC_ISSUER_URL: "https://identity.example.test/realms/lab",
-  OIDC_CLIENT_ID: "workspace-monitor",
-  OIDC_CLIENT_SECRET_FILE: "/run/secrets/oidc_client_secret",
-  OIDC_SCOPES: "openid profile",
-  OIDC_ROLE_CLAIM: "groups",
-  OIDC_DISPLAY_NAME_CLAIM: "preferred_username",
-  OIDC_VIEWER_GROUP: "/workspace-monitor/viewer",
-  OIDC_OPERATOR_GROUP: "/workspace-monitor/operator",
-  OIDC_ADMINISTRATOR_GROUP: "/workspace-monitor/administrator"
+  AUTH_AUDIT_DATABASE_PATH: "/var/lib/workspace-monitor/auth.sqlite",
+  CLOUDFLARE_ACCESS_TEAM_DOMAIN: "https://lab.cloudflareaccess.com",
+  CLOUDFLARE_ACCESS_AUDIENCE: "a".repeat(64),
+  CLOUDFLARE_ACCESS_ROLE_MAPPING_FILE: "/run/secrets/cloudflare_access_roles"
 } as const;
 
 describe("inventory runtime configuration", () => {
@@ -29,25 +22,21 @@ describe("inventory runtime configuration", () => {
     expect(config.kubernetes.tokenFile).toBe("/run/secrets/kubernetes_inventory_token");
     expect(config.kubernetes.toolUrl).toMatch(/^#/u);
     expect(config.incidents).toEqual({ databasePath: "deploy/compose/lab-observability/data/incidents.sqlite", evaluationIntervalSeconds: 30 });
-    expect(config.authentication).toMatchObject({
+    expect(config.authentication).toEqual({
       publicOrigin: "https://monitor.jefferyhaynes.net",
-      redirectUri: "https://monitor.jefferyhaynes.net/auth/callback",
-      postLogoutRedirectUri: "https://monitor.jefferyhaynes.net/",
-      issuerUrl: "https://identity.example.test/realms/lab",
-      clientId: "workspace-monitor",
-      clientSecretFile: "/run/secrets/oidc_client_secret",
-      sessionDatabasePath: "/var/lib/workspace-monitor/auth.sqlite",
-      sessionKeyringFile: "/run/secrets/auth_session_keyring",
-      roleClaim: "groups",
-      displayNameClaim: "preferred_username",
-      scopes: ["openid", "profile"],
-      idleSeconds: 3600,
-      absoluteSeconds: 43_200,
-      auditRetentionDays: 180
+      teamDomain: "https://lab.cloudflareaccess.com",
+      audience: "a".repeat(64),
+      roleMappingFile: "/run/secrets/cloudflare_access_roles",
+      auditDatabasePath: "/var/lib/workspace-monitor/auth.sqlite",
+      auditRetentionDays: 180,
+      auditMaxRecords: 100_000,
+      clockToleranceSeconds: 30,
+      maxTokenLifetimeSeconds: 86_400,
+      timeoutSeconds: 5
     });
   });
 
-  it("accepts explicit overrides without accepting bearer tokens in environment variables", () => {
+  it("accepts explicit overrides without accepting credentials in environment variables", () => {
     const config = parseRuntimeConfig({
       ...authenticationEnvironment,
       INVENTORY_PORT: "4100",
@@ -59,10 +48,9 @@ describe("inventory runtime configuration", () => {
       PROMETHEUS_CONCURRENCY: "6",
       INCIDENT_DATABASE_PATH: "/var/lib/workspace-monitor/incidents.sqlite",
       INCIDENT_EVALUATION_INTERVAL_SECONDS: "60",
-      AUTH_SESSION_IDLE_SECONDS: "1800",
-      AUTH_SESSION_ABSOLUTE_SECONDS: "28800",
-      OIDC_SCOPES: "openid profile groups",
-      OIDC_ROLE_CLAIM: "realm_access.groups"
+      CLOUDFLARE_ACCESS_CLOCK_TOLERANCE_SECONDS: "45",
+      CLOUDFLARE_ACCESS_MAX_TOKEN_LIFETIME_SECONDS: "43200",
+      CLOUDFLARE_ACCESS_JWKS_TIMEOUT_SECONDS: "7"
     });
 
     expect(config.port).toBe(4100);
@@ -70,11 +58,11 @@ describe("inventory runtime configuration", () => {
     expect(config.kubernetes.tokenFile).toBe("/run/secrets/read_only_token");
     expect(config.prometheus).toEqual({ apiUrl: "https://prometheus.example.test", concurrency: 6 });
     expect(config.incidents).toEqual({ databasePath: "/var/lib/workspace-monitor/incidents.sqlite", evaluationIntervalSeconds: 60 });
-    expect(config.authentication).toMatchObject({ idleSeconds: 1800, absoluteSeconds: 28_800, scopes: ["openid", "profile", "groups"], roleClaim: "realm_access.groups" });
+    expect(config.authentication).toMatchObject({ clockToleranceSeconds: 45, maxTokenLifetimeSeconds: 43_200, timeoutSeconds: 7 });
     expect(config).not.toHaveProperty("kubernetes.bearerToken");
   });
 
-  it("rejects invalid numeric and upstream URL settings explicitly", () => {
+  it("rejects invalid numeric, upstream URL, and Access trust settings explicitly", () => {
     expect(() => parseRuntimeConfig({ ...authenticationEnvironment, INVENTORY_PORT: "0" })).toThrow("INVENTORY_PORT");
     expect(() => parseRuntimeConfig({ ...authenticationEnvironment, UPSTREAM_TIMEOUT_MS: "not-a-number" })).toThrow("UPSTREAM_TIMEOUT_MS");
     expect(() => parseRuntimeConfig({ ...authenticationEnvironment, GATUS_INTERNAL_API_URL: "file:///etc/passwd" })).toThrow("GATUS_INTERNAL_API_URL");
@@ -82,18 +70,18 @@ describe("inventory runtime configuration", () => {
     expect(() => parseRuntimeConfig({ ...authenticationEnvironment, INCIDENT_DATABASE_PATH: ":memory:" })).toThrow("INCIDENT_DATABASE_PATH");
     expect(() => parseRuntimeConfig({ ...authenticationEnvironment, INCIDENT_EVALUATION_INTERVAL_SECONDS: "10" })).toThrow("INCIDENT_EVALUATION_INTERVAL_SECONDS");
     expect(() => parseRuntimeConfig({ ...authenticationEnvironment, AUTH_PUBLIC_ORIGIN: "http://monitor.example.test" })).toThrow("AUTH_PUBLIC_ORIGIN");
-    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, OIDC_ISSUER_URL: "http://identity.example.test" })).toThrow("OIDC_ISSUER_URL");
-    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, OIDC_SCOPES: "profile" })).toThrow("OIDC_SCOPES");
-    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, AUTH_SESSION_IDLE_SECONDS: "43200" })).toThrow("shorter");
+    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, AUTH_PUBLIC_ORIGIN: "not-a-url" })).toThrow("AUTH_PUBLIC_ORIGIN");
+    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, CLOUDFLARE_ACCESS_TEAM_DOMAIN: "http://lab.cloudflareaccess.com" })).toThrow("CLOUDFLARE_ACCESS_TEAM_DOMAIN");
+    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, CLOUDFLARE_ACCESS_TEAM_DOMAIN: "https://attacker.example" })).toThrow("CLOUDFLARE_ACCESS_TEAM_DOMAIN");
+    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, CLOUDFLARE_ACCESS_AUDIENCE: "bad audience" })).toThrow("CLOUDFLARE_ACCESS_AUDIENCE");
+    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, CLOUDFLARE_ACCESS_MAX_TOKEN_LIFETIME_SECONDS: "59" })).toThrow("CLOUDFLARE_ACCESS_MAX_TOKEN_LIFETIME_SECONDS");
   });
 
-  it("requires explicit identity-provider and server-side credential file configuration", () => {
+  it("requires explicit Cloudflare Access identity and host-only role mapping configuration", () => {
     expect(() => parseRuntimeConfig({})).toThrow("AUTH_PUBLIC_ORIGIN");
-    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, OIDC_CLIENT_ID: "" })).toThrow("OIDC_CLIENT_ID");
-    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, OIDC_ROLE_CLAIM: undefined })).toThrow("OIDC_ROLE_CLAIM");
-    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, OIDC_CLIENT_SECRET: "must-never-be-read" }))
-      .not.toThrow();
-    expect(parseRuntimeConfig({ ...authenticationEnvironment, OIDC_CLIENT_SECRET: "must-never-be-read" }).authentication)
-      .not.toHaveProperty("clientSecret");
+    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, CLOUDFLARE_ACCESS_AUDIENCE: "" })).toThrow("CLOUDFLARE_ACCESS_AUDIENCE");
+    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, CLOUDFLARE_ACCESS_ROLE_MAPPING_FILE: undefined })).toThrow("CLOUDFLARE_ACCESS_ROLE_MAPPING_FILE");
+    expect(() => parseRuntimeConfig({ ...authenticationEnvironment, CF_ACCESS_CLIENT_SECRET: "must-never-be-read" })).not.toThrow();
+    expect(parseRuntimeConfig({ ...authenticationEnvironment, CF_ACCESS_CLIENT_SECRET: "must-never-be-read" }).authentication).not.toHaveProperty("clientSecret");
   });
 });

@@ -12,13 +12,12 @@ describe("fixture monitoring provider", () => {
       fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
         apiVersion: 1,
         authenticated: true,
-        user: { id: "oidc:user", displayName: "Operator", role: "operator" },
-        expiresAt: "2026-08-17T00:00:00.000Z",
-        idleExpiresAt: "2026-08-16T13:00:00.000Z"
+        user: { id: "access:user", displayName: "Operator", role: "operator" },
+        expiresAt: "2026-08-17T00:00:00.000Z"
       }), { status: 200 })),
       timeoutMs: 1000
     });
-    await expect(live.getSession()).resolves.toMatchObject({ user: { id: "oidc:user", role: "operator" } });
+    await expect(live.getSession()).resolves.toMatchObject({ user: { id: "access:user", role: "operator" } });
 
     const anonymous = createLiveMonitoringProvider({
       fetchImpl: () => Promise.resolve(new Response(JSON.stringify({ error: { code: "authentication_required", message: "Authentication is required." } }), { status: 401 })),
@@ -214,7 +213,7 @@ describe("fixture monitoring provider", () => {
       summary: { total: 1, active: 1, resolved: 0, unacknowledged: 1, silenced: 0 },
       alertSource: { name: "inventory-health-evaluator", availability: "available", evaluatedAt: "2026-08-14T14:00:00Z", message: null },
       notification: { state: "unconfigured", message: "No destination configured." },
-      operator: { id: "oidc:lab-operator", displayName: "Lab Operator", role: "operator", identityMode: "authenticated-session" }, incidents: [incident]
+      operator: { id: "access:lab-operator", displayName: "Lab Operator", role: "operator", identityMode: "cloudflare-access" }, incidents: [incident]
     } as const;
     const detail = { apiVersion: 1, assembledAt: list.assembledAt, notification: list.notification, operator: list.operator, incident, audit: [] } as const;
     const fetchImpl = vi.fn()

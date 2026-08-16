@@ -854,7 +854,7 @@ export function SettingsPage(): React.JSX.Element {
   const integrations = [
     { label: "Data sources", value: "7 collectors configured", icon: DatabaseIcon },
     { label: "Cloud accounts", value: "Lab network · Cloudflare", icon: CloudIcon },
-    { label: "SSO / RBAC", value: "OIDC · Viewer / Operator / Administrator", icon: UsersThreeIcon },
+    { label: "SSO / RBAC", value: "Cloudflare Access · Viewer / Operator / Administrator", icon: UsersThreeIcon },
     { label: "API & audit", value: "No service tokens issued", icon: ShieldCheckIcon }
   ];
   return (

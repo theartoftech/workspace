@@ -355,14 +355,8 @@ validate_runtime_environment() {
         MONITORING_GID
         MONITORING_DATA_DIR
         GRAFANA_ADMIN_PASSWORD_FILE
-        OIDC_ISSUER_URL
-        OIDC_CLIENT_ID
-        OIDC_SCOPES
-        OIDC_ROLE_CLAIM
-        OIDC_DISPLAY_NAME_CLAIM
-        OIDC_VIEWER_GROUP
-        OIDC_OPERATOR_GROUP
-        OIDC_ADMINISTRATOR_GROUP
+        CLOUDFLARE_ACCESS_TEAM_DOMAIN
+        CLOUDFLARE_ACCESS_AUDIENCE
     )
     local key
     local value
@@ -380,7 +374,11 @@ validate_runtime_environment() {
     [[ "$(env_value MONITORING_BIND_ADDRESS)" == "127.0.0.1" ]] || fail "MONITORING_BIND_ADDRESS must remain 127.0.0.1 for the Cloudflare tunnel profile."
     [[ "$(env_value MONITORING_PUBLIC_HOST)" == "monitor.jefferyhaynes.net" ]] || fail "MONITORING_PUBLIC_HOST must be monitor.jefferyhaynes.net for this lab profile."
     [[ "$(env_value MONITORING_PUBLIC_URL)" == "https://monitor.jefferyhaynes.net" ]] || fail "MONITORING_PUBLIC_URL must be https://monitor.jefferyhaynes.net."
-    [[ "$(env_value OIDC_ISSUER_URL)" == https://* ]] || fail "OIDC_ISSUER_URL must use HTTPS."
+    [[ "$(env_value CLOUDFLARE_ACCESS_TEAM_DOMAIN)" =~ ^https://[A-Za-z0-9.-]+\.cloudflareaccess\.com$ ]] || \
+        fail "CLOUDFLARE_ACCESS_TEAM_DOMAIN must be an HTTPS cloudflareaccess.com origin."
+    value="$(env_value CLOUDFLARE_ACCESS_AUDIENCE)"
+    [[ "$value" =~ ^[-A-Za-z0-9_]+$ && ${#value} -ge 16 && ${#value} -le 256 ]] || \
+        fail "CLOUDFLARE_ACCESS_AUDIENCE must be a safe 16 to 256 character identifier."
     value="$(env_value MONITORING_UID)"
     [[ "$value" =~ ^[0-9]+$ && "$value" != "0" ]] || fail "MONITORING_UID must be a non-zero numeric host user ID."
     value="$(env_value MONITORING_GID)"
@@ -488,12 +486,12 @@ validate_locked_secret() {
 validate_identity_credentials() {
     local data_directory
     data_directory="$(resolve_env_path "$(env_value MONITORING_DATA_DIR)")"
-    local client_secret="$data_directory/runtime-secrets/oidc_client_secret"
-    local session_keyring="$data_directory/runtime-secrets/auth_session_keyring"
-    validate_locked_secret "OIDC client secret" "$client_secret"
-    validate_locked_secret "Authentication session keyring" "$session_keyring"
-    grep -Eq '"version"[[:space:]]*:[[:space:]]*1' "$session_keyring" || \
-        fail "Authentication session keyring does not declare supported version 1: $session_keyring"
+    local role_mapping="$data_directory/runtime-secrets/cloudflare_access_roles"
+    validate_locked_secret "Cloudflare Access role mapping" "$role_mapping"
+    grep -Eq '"version"[[:space:]]*:[[:space:]]*1' "$role_mapping" || \
+        fail "Cloudflare Access role mapping does not declare supported version 1: $role_mapping"
+    grep -Eq '"identities"[[:space:]]*:' "$role_mapping" || \
+        fail "Cloudflare Access role mapping does not declare identities: $role_mapping"
 }
 
 verify_http() {
@@ -535,7 +533,7 @@ verify_portal_routes() {
     local routes=("/" "/deployments" "/services/cpq-demo" "/infrastructure" "/performance" "/incidents" "/logs" "/settings")
     local route
     for route in "${routes[@]}"; do
-        verify_unauthenticated_http "Portal route $route" "http://127.0.0.1:3100${route}" 302
+        verify_unauthenticated_http "Portal route $route" "http://127.0.0.1:3100${route}" 401
     done
     local protected_endpoints=(
         "/api/v1/session"
@@ -551,8 +549,8 @@ verify_portal_routes() {
     for endpoint in "${protected_endpoints[@]}"; do
         verify_unauthenticated_http "Protected endpoint $endpoint" "http://127.0.0.1:3100${endpoint}" 401
     done
-    verify_unauthenticated_http "OIDC login start" "http://127.0.0.1:3100/auth/login" 302
-    echo "Anonymous portal, monitoring API, and source-tool access fails closed. Authenticated browser acceptance is required to validate role-scoped evidence."
+    verify_unauthenticated_http "Obsolete direct-OIDC login route" "http://127.0.0.1:3100/auth/login" 404
+    echo "Anonymous portal, monitoring API, and source-tool access fails closed. Cloudflare Access browser acceptance is required to validate role-scoped evidence."
 }
 
 verify_portal_container_health() {
