@@ -1,4 +1,5 @@
 import type { HealthState, InventorySnapshot, ServiceInventory } from "../../../shared/inventory";
+import type { SessionResponse, WorkspaceRole } from "../../../shared/auth";
 import type { CorrelatedKubernetesEvent, LogCorrelationSnapshot, LogEntry, LogOmission, LogPod, LogQuery, LogSourceStatus } from "../../../shared/logs";
 import type {
   DeclareIncidentCommand,
@@ -34,6 +35,14 @@ const incidentAuditActions = new Set<IncidentAuditAction>(["created", "acknowled
 const logEnvironments = new Set<EnvironmentId>(["all", "demo", "test", "portfolio"]);
 const logSeverities = new Set(["all", "error", "warning", "info", "debug", "unknown"]);
 const entrySeverities = new Set(["error", "warning", "info", "debug", "unknown"]);
+const workspaceRoles = new Set<WorkspaceRole>(["viewer", "operator", "administrator"]);
+
+export class MonitoringRequestError extends Error {
+  constructor(readonly status: number, readonly code: string, message: string) {
+    super(message);
+    this.name = "MonitoringRequestError";
+  }
+}
 
 function validateFilters(environment: EnvironmentId, timeRange: TimeRange): void {
   if (!environments.has(environment)) throw new Error(`Unsupported environment: ${environment}`);
@@ -295,7 +304,16 @@ function isIncident(value: unknown): value is IncidentSummary {
 function isIncidentEnvelope(value: unknown): boolean {
   const raw = record(value); const notification = record(raw?.notification); const operator = record(raw?.operator);
   return raw !== null && notification !== null && notification.state === "unconfigured" && typeof notification.message === "string"
-    && operator !== null && typeof operator.id === "string" && operator.identityMode === "configured-lab-operator";
+    && operator !== null && typeof operator.id === "string" && typeof operator.displayName === "string"
+    && workspaceRoles.has(operator.role as WorkspaceRole) && operator.identityMode === "authenticated-session";
+}
+
+function parseSession(value: unknown): SessionResponse {
+  const raw = record(value); const user = record(raw?.user);
+  if (raw === null || raw.apiVersion !== 1 || raw.authenticated !== true || user === null
+    || typeof user.id !== "string" || typeof user.displayName !== "string" || !workspaceRoles.has(user.role as WorkspaceRole)
+    || !timestamp(raw.expiresAt) || !timestamp(raw.idleExpiresAt)) throw new Error("Session API returned a malformed response");
+  return value as SessionResponse;
 }
 
 function parseIncidentList(value: unknown): IncidentListResponse {
@@ -422,7 +440,14 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
     toStatus: "active",
     version: 1
   }]]));
-  const operator = { id: "J. Haynes", identityMode: "configured-lab-operator" } as const;
+  const fixtureSession: SessionResponse = {
+    apiVersion: 1,
+    authenticated: true,
+    user: { id: "oidc:fixture-administrator", displayName: "J. Haynes", role: "administrator" },
+    expiresAt: "2026-08-13T03:15:00Z",
+    idleExpiresAt: "2026-08-12T16:15:00Z"
+  };
+  const operator = { ...fixtureSession.user, identityMode: "authenticated-session" } as const;
   const fixtureNotification = { state: "unconfigured", message: "Notification delivery is not configured in the deterministic fixture provider." } as const;
   function detail(id: string): IncidentDetailResponse {
     const incident = incidents.find((item) => item.id === id);
@@ -445,6 +470,7 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
     };
   }
   return {
+    getSession(): Promise<SessionResponse> { return Promise.resolve(fixtureSession); },
     getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot> {
       return Promise.resolve().then(() => {
         validateFilters(environment, timeRange);
@@ -493,12 +519,12 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
           id, version: 1, title: command.title.trim(), description: `Operator-declared incident affecting ${service.name}.`,
           serviceId: service.id, serviceName: service.name, environment: service.environment, severity: command.severity, status: "active",
           startedAt: now, lastObservedAt: now, updatedAt: now, resolvedAt: null, acknowledgedAt: null, acknowledgedBy: null,
-          declaredAt: now, declaredBy: operator.id, assignee: operator.id, owner: service.owner, alertActive: false, recoveredAt: null,
+          declaredAt: now, declaredBy: operator.displayName, assignee: operator.displayName, owner: service.owner, alertActive: false, recoveredAt: null,
           runbook: { id: `${service.id}-incident-response`, title: `${service.name} incident response`, steps: ["Confirm current monitoring evidence.", "Inspect performance and infrastructure.", "Record findings before changing state."] },
           evidence: [{ source: "operator", state: "operator", firstObservedAt: now, lastObservedAt: now, occurrences: 1, message: command.reason, active: true }], silence: null
         };
         incidents = [...incidents, incident];
-        audit.set(id, [{ id: 1, action: "created", actor: operator.id, reason: command.reason, createdAt: now, fromStatus: null, toStatus: "active", version: 1 }]);
+        audit.set(id, [{ id: 1, action: "created", actor: `${operator.displayName} (${operator.id})`, reason: command.reason, createdAt: now, fromStatus: null, toStatus: "active", version: 1 }]);
         return detail(id);
       });
     },
@@ -512,22 +538,22 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
         let action: IncidentAuditAction;
         if (command.action === "acknowledge") {
           if (incident.acknowledgedAt !== null) throw new Error("Fixture incident is already acknowledged");
-          updated = { ...incident, version, updatedAt: now, acknowledgedAt: now, acknowledgedBy: operator.id, assignee: operator.id };
+          updated = { ...incident, version, updatedAt: now, acknowledgedAt: now, acknowledgedBy: operator.displayName, assignee: operator.displayName };
           action = "acknowledged";
         } else if (command.action === "declare") {
           if (incident.declaredAt !== null) throw new Error("Fixture incident is already declared");
-          updated = { ...incident, version, updatedAt: now, declaredAt: now, declaredBy: operator.id, assignee: operator.id };
+          updated = { ...incident, version, updatedAt: now, declaredAt: now, declaredBy: operator.displayName, assignee: operator.displayName };
           action = "declared";
         } else if (command.action === "silence") {
           if (command.durationMinutes === undefined) throw new Error("Fixture silence requires a duration");
-          updated = { ...incident, version, updatedAt: now, silence: { createdAt: now, expiresAt: new Date(Date.parse(now) + command.durationMinutes * 60_000).toISOString(), createdBy: operator.id, reason: command.reason, active: true } };
+          updated = { ...incident, version, updatedAt: now, silence: { createdAt: now, expiresAt: new Date(Date.parse(now) + command.durationMinutes * 60_000).toISOString(), createdBy: operator.displayName, reason: command.reason, active: true } };
           action = "silenced";
         } else {
           updated = { ...incident, version, updatedAt: now, status: "resolved", resolvedAt: now };
           action = "resolved";
         }
         incidents = incidents.map((item) => item.id === id ? updated : item);
-        audit.set(id, [...(audit.get(id) ?? []), { id: (audit.get(id)?.length ?? 0) + 1, action, actor: operator.id, reason: command.reason, createdAt: now, fromStatus: "active", toStatus: updated.status, version }]);
+        audit.set(id, [...(audit.get(id) ?? []), { id: (audit.get(id)?.length ?? 0) + 1, action, actor: `${operator.displayName} (${operator.id})`, reason: command.reason, createdAt: now, fromStatus: "active", toStatus: updated.status, version }]);
         return detail(id);
       });
     }
@@ -550,6 +576,7 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
     try {
       response = await fetchImpl(path, {
         method,
+        credentials: "same-origin",
         headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
         signal: controller.signal,
         ...(body === undefined ? {} : { body: JSON.stringify(body) })
@@ -562,12 +589,14 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
     }
     if (!response.ok) {
       let message = `${label} returned HTTP ${response.status}`;
+      let code = "http_error";
       try {
         const errorPayload = record(await response.json() as unknown);
         const error = record(errorPayload?.error);
         if (typeof error?.message === "string") message = error.message;
+        if (typeof error?.code === "string") code = error.code;
       } catch { /* retain the explicit HTTP error */ }
-      throw new Error(message);
+      throw new MonitoringRequestError(response.status, code, message);
     }
     try {
       return await response.json() as unknown;
@@ -576,6 +605,9 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
     }
   }
   return {
+    async getSession(): Promise<SessionResponse> {
+      return parseSession(await fetchJson("/api/v1/session", "Session API"));
+    },
     async getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot> {
       validateFilters(environment, timeRange);
       const payload = await fetchJson(`/api/v1/inventory?environment=${encodeURIComponent(environment)}`, "Inventory API");

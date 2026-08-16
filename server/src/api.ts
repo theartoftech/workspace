@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 
+import type { AuthenticationAuditEvent, SessionUser, WorkspaceRole } from "../../shared/auth";
 import type { InventoryEnvironment, InventorySnapshot, ServiceDetailResponse } from "../../shared/inventory";
 import type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListResponse, IncidentTransitionCommand } from "../../shared/incidents";
 import type { LogQuery } from "../../shared/logs";
@@ -8,6 +9,7 @@ import { IncidentRequestError } from "./incidents";
 import { LogRequestError, type LogReader } from "./logs";
 import { PerformanceRequestError } from "./prometheus";
 import type { TopologyReader } from "./topology";
+import { AuthenticationError, type AuthenticatedSession, type LoginCompletion, type LoginStart, type LogoutResult } from "./auth";
 
 export interface InventoryReader {
   getInventory(environment: string): Promise<InventorySnapshot>;
@@ -22,6 +24,23 @@ export interface IncidentOperations {
   getDetail(id: string): Promise<IncidentDetailResponse>;
   declare(command: DeclareIncidentCommand): Promise<IncidentDetailResponse>;
   transition(id: string, command: IncidentTransitionCommand): Promise<IncidentDetailResponse>;
+}
+
+export interface AuthenticatedIncidentOperations {
+  list(environment: string, statusFilter: string, actor: SessionUser): Promise<IncidentListResponse>;
+  getDetail(id: string, actor: SessionUser): Promise<IncidentDetailResponse>;
+  declare(command: DeclareIncidentCommand, actor: SessionUser): Promise<IncidentDetailResponse>;
+  transition(id: string, command: IncidentTransitionCommand, actor: SessionUser): Promise<IncidentDetailResponse>;
+}
+
+export interface WorkspaceAuthentication {
+  readonly publicOrigin: string;
+  startLogin(returnTo: string): Promise<LoginStart>;
+  completeLoginQuery(search: string, cookieHeader: string | null): Promise<LoginCompletion>;
+  authenticate(cookieHeader: string | null): Promise<AuthenticatedSession>;
+  logout(cookieHeader: string | null): Promise<LogoutResult>;
+  recordAuthorizationDenied(user: SessionUser, action: string, reasonCode: string): void;
+  listAudit(limit: number): readonly AuthenticationAuditEvent[];
 }
 
 export function safeNodeRequestMethod(method: string | undefined): "GET" | "HEAD" | "POST" | "DELETE" {
@@ -71,6 +90,12 @@ function jsonResponse(status: number, body: unknown, headOnly: boolean, extraHea
   const serialized = JSON.stringify(body);
   const headers = responseHeaders({ "Content-Length": String(Buffer.byteLength(serialized)), ...extraHeaders });
   return new Response(headOnly ? null : serialized, { status, headers });
+}
+
+function redirectResponse(status: 302 | 303, location: string, cookies: readonly string[] = []): Response {
+  const headers = responseHeaders({ Location: location, "Content-Length": "0" });
+  for (const cookie of cookies) headers.append("Set-Cookie", cookie);
+  return new Response(null, { status, headers });
 }
 
 function errorBody(code: string, message: string): ApiErrorBody {
@@ -284,7 +309,121 @@ export async function handleInventoryRequest(request: Request, reader: Inventory
   return jsonResponse(404, errorBody("not_found", "The requested API route does not exist."), headOnly);
 }
 
-export function createInventoryHttpServer(reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: IncidentOperations, logReader?: LogReader): Server {
+const roleRank: Readonly<Record<WorkspaceRole, number>> = { viewer: 1, operator: 2, administrator: 3 };
+
+function hasRole(user: SessionUser, required: WorkspaceRole): boolean {
+  return roleRank[user.role] >= roleRank[required];
+}
+
+function mutationOriginIsValid(request: Request, authentication: WorkspaceAuthentication): boolean {
+  return request.headers.get("origin") === authentication.publicOrigin && request.headers.get("sec-fetch-site") === "same-origin";
+}
+
+function authError(cause: unknown, headOnly: boolean): Response {
+  if (cause instanceof AuthenticationError) return jsonResponse(cause.status, errorBody(cause.code, cause.message), headOnly);
+  return jsonResponse(503, errorBody("authentication_unavailable", "Authentication could not be completed."), headOnly);
+}
+
+async function handleAuthenticationRoute(request: Request, authentication: WorkspaceAuthentication, url: URL): Promise<Response | null> {
+  if (!url.pathname.startsWith("/auth/")) return null;
+  try {
+    if (url.pathname === "/auth/login") {
+      if (request.method !== "GET") return jsonResponse(405, errorBody("method_not_allowed", "Only GET is supported for login."), false, { Allow: "GET" });
+      const unexpected = [...url.searchParams.keys()].find((parameter) => parameter !== "returnTo");
+      if (unexpected !== undefined || url.searchParams.getAll("returnTo").length > 1) return jsonResponse(400, errorBody("invalid_parameter", "Login accepts one returnTo parameter."), false);
+      const login = await authentication.startLogin(url.searchParams.get("returnTo") ?? "/");
+      return redirectResponse(302, login.authorizationUrl, [login.transactionCookie]);
+    }
+    if (url.pathname === "/auth/callback") {
+      if (request.method !== "GET") return jsonResponse(405, errorBody("method_not_allowed", "Only GET is supported for the identity callback."), false, { Allow: "GET" });
+      const completion = await authentication.completeLoginQuery(url.search, request.headers.get("cookie"));
+      return redirectResponse(303, completion.returnTo, [completion.clearTransactionCookie, completion.sessionCookie]);
+    }
+    if (url.pathname === "/auth/logout") {
+      if (request.method !== "POST") return jsonResponse(405, errorBody("method_not_allowed", "Only POST is supported for logout."), false, { Allow: "POST" });
+      if (!mutationOriginIsValid(request, authentication)) return jsonResponse(403, errorBody("csrf_rejected", "The request origin is not allowed."), false);
+      const logout = await authentication.logout(request.headers.get("cookie"));
+      return redirectResponse(303, logout.redirectTo, [logout.clearSessionCookie]);
+    }
+    return jsonResponse(404, errorBody("not_found", "The requested authentication route does not exist."), request.method === "HEAD");
+  } catch (cause: unknown) {
+    return authError(cause, request.method === "HEAD");
+  }
+}
+
+export async function handleWorkspaceRequest(
+  request: Request,
+  authentication: WorkspaceAuthentication,
+  reader: InventoryReader,
+  performanceReader?: PerformanceReader,
+  topologyReader?: TopologyReader,
+  incidentOperations?: AuthenticatedIncidentOperations,
+  logReader?: LogReader
+): Promise<Response> {
+  const url = new URL(request.url);
+  const headOnly = request.method === "HEAD";
+  if (url.pathname === "/healthz") return handleInventoryRequest(request, reader, performanceReader, topologyReader, undefined, logReader);
+  const authenticationRoute = await handleAuthenticationRoute(request, authentication, url);
+  if (authenticationRoute !== null) return authenticationRoute;
+  if (!url.pathname.startsWith("/api/v1/")) return jsonResponse(404, errorBody("not_found", "The requested route does not exist."), headOnly);
+
+  let session: AuthenticatedSession;
+  try {
+    session = await authentication.authenticate(request.headers.get("cookie"));
+  } catch (cause: unknown) {
+    return authError(cause, headOnly);
+  }
+
+  if (url.pathname === "/api/v1/session") {
+    if (request.method !== "GET" && !headOnly) return jsonResponse(405, errorBody("method_not_allowed", "Only GET and HEAD are supported for the session endpoint."), false, { Allow: "GET, HEAD" });
+    if ([...url.searchParams.keys()].length > 0) return jsonResponse(400, errorBody("invalid_parameter", "The session endpoint does not accept query parameters."), headOnly);
+    return jsonResponse(200, { apiVersion: 1, authenticated: true, user: session.user, expiresAt: session.expiresAt, idleExpiresAt: session.idleExpiresAt }, headOnly);
+  }
+
+  if (url.pathname === "/api/v1/auth-check") {
+    if (request.method !== "GET" && !headOnly) return jsonResponse(405, errorBody("method_not_allowed", "Only GET and HEAD are supported for authentication checks."), false, { Allow: "GET, HEAD" });
+    return new Response(null, { status: 204, headers: responseHeaders({ "Content-Length": "0" }) });
+  }
+
+  if (url.pathname === "/api/v1/auth/audit") {
+    if (request.method !== "GET" && !headOnly) return jsonResponse(405, errorBody("method_not_allowed", "Only GET and HEAD are supported for authentication audit."), false, { Allow: "GET, HEAD" });
+    if (!hasRole(session.user, "administrator")) {
+      authentication.recordAuthorizationDenied(session.user, "auth.audit.read", "insufficient_role");
+      return jsonResponse(403, errorBody("forbidden", "The authenticated role is not allowed to read authentication audit history."), headOnly);
+    }
+    const unexpected = [...url.searchParams.keys()].find((parameter) => parameter !== "limit");
+    if (unexpected !== undefined || url.searchParams.getAll("limit").length > 1) return jsonResponse(400, errorBody("invalid_parameter", "Authentication audit accepts one limit parameter."), headOnly);
+    const rawLimit = url.searchParams.get("limit") ?? "100";
+    if (!/^[1-9][0-9]{0,2}$/u.test(rawLimit)) return jsonResponse(400, errorBody("invalid_audit_limit", "Authentication audit limit must be 1 to 100."), headOnly);
+    const limit = Number(rawLimit);
+    if (limit > 100) return jsonResponse(400, errorBody("invalid_audit_limit", "Authentication audit limit must be 1 to 100."), headOnly);
+    try {
+      return jsonResponse(200, { apiVersion: 1, events: authentication.listAudit(limit) }, headOnly);
+    } catch (cause: unknown) {
+      return authError(cause, headOnly);
+    }
+  }
+
+  const mutating = request.method !== "GET" && request.method !== "HEAD";
+  const incidentMutation = request.method === "POST" && (url.pathname === "/api/v1/incidents" || incidentPath(url.pathname)?.transition === true);
+  if (mutating && !mutationOriginIsValid(request, authentication)) {
+    authentication.recordAuthorizationDenied(session.user, incidentMutation ? "incident.mutate" : "request.mutate", "csrf_rejected");
+    return jsonResponse(403, errorBody("csrf_rejected", "The request origin is not allowed."), false);
+  }
+  if (incidentMutation && !hasRole(session.user, "operator")) {
+    authentication.recordAuthorizationDenied(session.user, "incident.mutate", "insufficient_role");
+    return jsonResponse(403, errorBody("forbidden", "The authenticated role is not allowed to mutate incidents."), false);
+  }
+  const boundIncidentOperations: IncidentOperations | undefined = incidentOperations === undefined ? undefined : {
+    list: (environment, statusFilter) => incidentOperations.list(environment, statusFilter, session.user),
+    getDetail: (id) => incidentOperations.getDetail(id, session.user),
+    declare: (command) => incidentOperations.declare(command, session.user),
+    transition: (id, command) => incidentOperations.transition(id, command, session.user)
+  };
+  return handleInventoryRequest(request, reader, performanceReader, topologyReader, boundIncidentOperations, logReader);
+}
+
+export function createInventoryHttpServer(authentication: WorkspaceAuthentication, reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: AuthenticatedIncidentOperations, logReader?: LogReader): Server {
   return createServer((incoming, outgoing) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -298,17 +437,26 @@ export function createInventoryHttpServer(reader: InventoryReader, performanceRe
     incoming.on("end", () => {
       const method = safeNodeRequestMethod(incoming.method);
       const body = Buffer.concat(chunks);
+      const headers = new Headers();
+      for (const name of ["accept", "content-type", "cookie", "origin", "sec-fetch-site"] as const) {
+        const value = incoming.headers[name];
+        if (typeof value === "string") headers.set(name, value);
+      }
       const request = new Request(new URL(incoming.url ?? "/", "http://inventory-api.local"), {
         method,
-        headers: incoming.headers["content-type"] === undefined ? undefined : { "Content-Type": incoming.headers["content-type"] },
+        headers,
         body: method === "POST" && body.byteLength > 0 ? body : undefined
       });
       const responsePromise = oversized
         ? Promise.resolve(jsonResponse(413, errorBody("incident_command_too_large", "Incident command exceeds the 16384-byte limit."), false))
-        : handleInventoryRequest(request, reader, performanceReader, topologyReader, incidentOperations, logReader);
+        : handleWorkspaceRequest(request, authentication, reader, performanceReader, topologyReader, incidentOperations, logReader);
       void responsePromise.then(async (response) => {
         outgoing.statusCode = response.status;
-        response.headers.forEach((value, key) => outgoing.setHeader(key, value));
+        response.headers.forEach((value, key) => {
+          if (key !== "set-cookie") outgoing.setHeader(key, value);
+        });
+        const cookies = response.headers.getSetCookie();
+        if (cookies.length > 0) outgoing.setHeader("Set-Cookie", cookies);
         outgoing.end(Buffer.from(await response.arrayBuffer()));
       }).catch(() => {
         outgoing.statusCode = 500;

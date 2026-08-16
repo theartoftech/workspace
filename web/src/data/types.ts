@@ -16,6 +16,7 @@ import type {
   IncidentStatusFilter,
   IncidentTransitionCommand
 } from "../../../shared/incidents";
+import type { SessionResponse } from "../../../shared/auth";
 
 export type EnvironmentId = InventoryEnvironment;
 export type TimeRange = PerformanceRange;
@@ -42,6 +43,7 @@ export interface OverviewSnapshot {
 }
 
 export interface MonitoringProvider {
+  getSession(): Promise<SessionResponse>;
   getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot>;
   getPerformance(environment: EnvironmentId, serviceId: string, timeRange: TimeRange): Promise<PerformanceSnapshot>;
   readonly getTopology?: (environment: EnvironmentId) => Promise<TopologySnapshot>;
@@ -51,6 +53,8 @@ export interface MonitoringProvider {
   readonly declareIncident?: (command: DeclareIncidentCommand) => Promise<IncidentDetailResponse>;
   readonly transitionIncident?: (id: string, command: IncidentTransitionCommand) => Promise<IncidentDetailResponse>;
 }
+
+export type { SessionResponse, SessionUser, WorkspaceRole } from "../../../shared/auth";
 
 export type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListResponse, IncidentStatusFilter, IncidentSummary, IncidentTransitionCommand } from "../../../shared/incidents";
 export type { PerformanceSnapshot } from "../../../shared/performance";

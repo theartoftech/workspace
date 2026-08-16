@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 import { createInventoryHttpServer } from "./api";
+import { AuthenticationService, parseSessionKeyringJson } from "./auth";
 import { loadCatalog } from "./catalog";
 import { parseRuntimeConfig } from "./config";
 import { GatusAdapter } from "./gatus";
@@ -10,11 +11,29 @@ import { InventoryAggregator } from "./inventory";
 import { KubernetesAdapter } from "./kubernetes";
 import { KubernetesLogReader, UnavailableLogReader, type LogReader } from "./logs";
 import { PrometheusPerformanceReader } from "./prometheus";
+import { DirectOidcProvider } from "./oidc";
 import { UnavailableSourceCollector, type SourceCollector } from "./source";
 import { KubernetesTopologyReader, UnavailableTopologyReader, type TopologyReader } from "./topology";
 import runtimePackage from "../package.json";
 
 if (runtimePackage.type !== "commonjs") throw new Error("Inventory API runtime must use CommonJS modules");
+
+async function readLockedSecret(path: string, label: string): Promise<string> {
+  let metadata: Awaited<ReturnType<typeof stat>>;
+  let value: string;
+  try {
+    [metadata, value] = await Promise.all([stat(path), readFile(path, "utf8")]);
+  } catch {
+    throw new Error(`${label} file is unavailable`);
+  }
+  const runtimeUid = process.getuid?.();
+  if ((metadata.mode & 0o777) !== 0o400 || (runtimeUid !== undefined && metadata.uid !== runtimeUid)) {
+    throw new Error(`${label} file must be owned by the runtime user with mode 0400`);
+  }
+  const normalized = value.trim();
+  if (normalized === "") throw new Error(`${label} file is empty`);
+  return normalized;
+}
 
 async function kubernetesCollector(
   config: ReturnType<typeof parseRuntimeConfig>,
@@ -92,10 +111,36 @@ async function run(): Promise<void> {
     await kubernetesCollector(config, client)
   ];
   const inventory = new InventoryAggregator(catalog, collectors);
+  const oidcClientSecret = await readLockedSecret(config.authentication.clientSecretFile, "OIDC client secret");
+  const sessionKeyring = parseSessionKeyringJson(await readLockedSecret(config.authentication.sessionKeyringFile, "Authentication session keyring"));
+  const authentication = new AuthenticationService({
+    config: {
+      publicOrigin: config.authentication.publicOrigin,
+      redirectUri: config.authentication.redirectUri,
+      postLogoutRedirectUri: config.authentication.postLogoutRedirectUri,
+      scopes: config.authentication.scopes,
+      roleClaim: config.authentication.roleClaim,
+      displayNameClaim: config.authentication.displayNameClaim,
+      groups: config.authentication.groups,
+      idleSeconds: config.authentication.idleSeconds,
+      absoluteSeconds: config.authentication.absoluteSeconds,
+      transactionSeconds: config.authentication.transactionSeconds,
+      auditRetentionDays: config.authentication.auditRetentionDays,
+      auditMaxRecords: config.authentication.auditMaxRecords
+    },
+    databasePath: config.authentication.sessionDatabasePath,
+    keyring: sessionKeyring,
+    provider: new DirectOidcProvider({
+      issuerUrl: config.authentication.issuerUrl,
+      clientId: config.authentication.clientId,
+      clientSecret: oidcClientSecret,
+      clockToleranceSeconds: config.authentication.clockToleranceSeconds,
+      timeoutSeconds: config.authentication.timeoutSeconds
+    })
+  });
   const incidentRepository = new SqliteIncidentRepository({
     databasePath: config.incidents.databasePath,
-    catalog,
-    operatorId: config.incidents.operatorId
+    catalog
   });
   const incidentService = new IncidentOperationsService({ repository: incidentRepository, inventoryReader: inventory });
   let evaluationActive = false;
@@ -111,6 +156,7 @@ async function run(): Promise<void> {
   await evaluateIncidents();
   const evaluationTimer = setInterval(() => { void evaluateIncidents(); }, config.incidents.evaluationIntervalSeconds * 1000);
   const server = createInventoryHttpServer(
+    authentication,
     inventory,
     new PrometheusPerformanceReader({
       apiUrl: config.prometheus.apiUrl,
@@ -123,19 +169,20 @@ async function run(): Promise<void> {
     await logReader(config, catalog, client)
   );
   server.listen(config.port, "0.0.0.0", () => {
-    process.stdout.write(`Workspace Monitor inventory API listening on port ${config.port}\n`);
+    process.stdout.write(`Workspace Monitor operations API listening on port ${config.port}\n`);
   });
   const shutdown = (): void => {
     clearInterval(evaluationTimer);
     server.close((error) => {
       try {
         incidentRepository.close();
+        authentication.close();
       } catch (cause: unknown) {
         process.stderr.write(`Incident database shutdown failed: ${cause instanceof Error ? cause.message : "unknown error"}\n`);
         process.exitCode = 1;
       }
       if (error) {
-        process.stderr.write(`Inventory API shutdown failed: ${error.message}\n`);
+        process.stderr.write(`Operations API shutdown failed: ${error.message}\n`);
         process.exitCode = 1;
       }
     });
@@ -146,6 +193,6 @@ async function run(): Promise<void> {
 
 void run().catch((cause: unknown) => {
   const message = cause instanceof Error ? cause.message : "Unknown startup error";
-  process.stderr.write(`Inventory API failed to start: ${message}\n`);
+  process.stderr.write(`Operations API failed to start: ${message}\n`);
   process.exitCode = 1;
 });

@@ -59,15 +59,35 @@ services:
       PROMETHEUS_API_URL: http://prometheus:9090
       PROMETHEUS_CONCURRENCY: "4"
       INCIDENT_DATABASE_PATH: /var/lib/workspace-monitor/incidents.sqlite
-      INCIDENT_OPERATOR_ID: jhaynes
       INCIDENT_EVALUATION_INTERVAL_SECONDS: "30"
+      AUTH_PUBLIC_ORIGIN: ${MONITORING_PUBLIC_URL}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      OIDC_SCOPES: ${OIDC_SCOPES}
+      OIDC_ROLE_CLAIM: ${OIDC_ROLE_CLAIM}
+      OIDC_DISPLAY_NAME_CLAIM: ${OIDC_DISPLAY_NAME_CLAIM}
+      OIDC_VIEWER_GROUP: ${OIDC_VIEWER_GROUP}
+      OIDC_OPERATOR_GROUP: ${OIDC_OPERATOR_GROUP}
+      OIDC_ADMINISTRATOR_GROUP: ${OIDC_ADMINISTRATOR_GROUP}
+      OIDC_CLOCK_TOLERANCE_SECONDS: "60"
+      OIDC_TIMEOUT_SECONDS: "5"
+      AUTH_SESSION_DATABASE_PATH: /var/lib/workspace-monitor/auth.sqlite
+      AUTH_SESSION_KEYRING_FILE: /run/secrets/auth_session_keyring
+      AUTH_SESSION_IDLE_SECONDS: "3600"
+      AUTH_SESSION_ABSOLUTE_SECONDS: "43200"
+      AUTH_TRANSACTION_SECONDS: "600"
+      AUTH_AUDIT_RETENTION_DAYS: "180"
+      AUTH_AUDIT_MAX_RECORDS: "100000"
       NODE_EXTRA_CA_CERTS: /run/kubernetes-ca/server-ca.crt
     depends_on:
       - prometheus
     extra_hosts:
       - host.docker.internal:host-gateway
     volumes:
-      - ${MONITORING_DATA_DIR}/runtime-secrets:/run/secrets:ro
+      - ${MONITORING_DATA_DIR}/runtime-secrets/kubernetes_inventory_token:/run/secrets/kubernetes_inventory_token:ro
+      - ${MONITORING_DATA_DIR}/runtime-secrets/oidc_client_secret:/run/secrets/oidc_client_secret:ro
+      - ${MONITORING_DATA_DIR}/runtime-secrets/auth_session_keyring:/run/secrets/auth_session_keyring:ro
       - ${MONITORING_DATA_DIR}/incidents:/var/lib/workspace-monitor
       - ${KUBERNETES_HOST_CA_FILE:-/var/lib/rancher/k3s/server/tls/server-ca.crt}:/run/kubernetes-ca/server-ca.crt:ro
     tmpfs:

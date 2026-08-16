@@ -1,10 +1,10 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { createFixtureMonitoringProvider } from "../data/provider";
+import { MonitoringRequestError, createFixtureMonitoringProvider } from "../data/provider";
 import type { MonitoringProvider } from "../data/types";
 
 const fixtureProvider = createFixtureMonitoringProvider();
@@ -18,6 +18,56 @@ function renderApp(route = "/"): void {
 }
 
 describe("enterprise application shell", () => {
+  it("does not load protected evidence until a session is authenticated", async () => {
+    const getOverview = vi.fn(() => Promise.reject(new Error("Protected evidence must not be requested")));
+    const provider: MonitoringProvider = {
+      ...fixtureProvider,
+      getSession: () => Promise.reject(new MonitoringRequestError(401, "authentication_required", "Authentication is required.")),
+      getOverview
+    };
+
+    render(<MemoryRouter initialEntries={["/logs?service=cpq-demo"]}><App provider={provider} /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "Authentication required" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/auth/login?returnTo=%2Flogs%3Fservice%3Dcpq-demo");
+    expect(getOverview).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "Logs & events" })).not.toBeInTheDocument();
+  });
+
+  it("shows provider failure explicitly without granting access", async () => {
+    const provider: MonitoringProvider = {
+      ...fixtureProvider,
+      getSession: () => Promise.reject(new MonitoringRequestError(503, "identity_provider_unavailable", "Identity provider is unavailable."))
+    };
+
+    render(<MemoryRouter><App provider={provider} /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "Identity provider unavailable" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Fleet overview" })).not.toBeInTheDocument();
+  });
+
+  it("keeps monitoring evidence readable for viewers while omitting incident commands", async () => {
+    const provider: MonitoringProvider = {
+      ...fixtureProvider,
+      getSession: () => Promise.resolve({
+        apiVersion: 1,
+        authenticated: true,
+        user: { id: "oidc:viewer", displayName: "Read Only", role: "viewer" },
+        expiresAt: "2026-08-17T12:00:00.000Z",
+        idleExpiresAt: "2026-08-16T13:00:00.000Z"
+      })
+    };
+
+    render(<MemoryRouter initialEntries={["/incidents"]}><App provider={provider} /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "Incidents" })).toBeInTheDocument();
+    expect(screen.getByText("Read Only")).toBeInTheDocument();
+    expect(screen.getByText("Viewer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Declare incident" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open runbook" })).toBeInTheDocument();
+  });
+
   it("labels fixture mode and exposes every primary route", async () => {
     renderApp();
 
@@ -32,6 +82,7 @@ describe("enterprise application shell", () => {
     const user = userEvent.setup();
     renderApp();
 
+    await screen.findByRole("heading", { name: "Fleet overview" });
     await user.click(screen.getByRole("link", { name: "Deployments" }));
     expect(await screen.findByRole("heading", { name: "Deployments" })).toBeInTheDocument();
 
@@ -54,6 +105,7 @@ describe("enterprise application shell", () => {
     const user = userEvent.setup();
     let latestService = "";
     const provider: MonitoringProvider = {
+      ...fixtureProvider,
       getOverview(environment, timeRange) { return fixtureProvider.getOverview(environment, timeRange); },
       getPerformance(environment, serviceId, timeRange) { return fixtureProvider.getPerformance(environment, serviceId, timeRange); },
       async getLogs(query) {
@@ -99,6 +151,7 @@ describe("enterprise application shell", () => {
 
   it("shows partial source evidence and internal/public disagreement", async () => {
     const partialProvider: MonitoringProvider = {
+      ...fixtureProvider,
       async getOverview(environment, timeRange) {
         const fixture = await fixtureProvider.getOverview(environment, timeRange);
         return {
@@ -156,6 +209,7 @@ describe("enterprise application shell", () => {
     const user = userEvent.setup();
     let performanceRequests = 0;
     const provider: MonitoringProvider = {
+      ...fixtureProvider,
       getOverview(environment, timeRange) {
         return fixtureProvider.getOverview(environment, timeRange);
       },
@@ -190,6 +244,7 @@ describe("enterprise application shell", () => {
 
   it("distinguishes a zero metric from no-data and query-error panel states", async () => {
     const provider: MonitoringProvider = {
+      ...fixtureProvider,
       getOverview(environment, timeRange) {
         return fixtureProvider.getOverview(environment, timeRange);
       },
@@ -303,16 +358,18 @@ describe("enterprise application shell", () => {
     expect(screen.getByRole("combobox", { name: "Affected service" })).toHaveValue("portfolio");
   });
 
-  it("provides the Cloudflare Access logout endpoint", async () => {
+  it("uses the local session logout endpoint", async () => {
     const user = userEvent.setup();
     renderApp();
     await screen.findByRole("heading", { name: "Fleet overview" });
     await user.click(screen.getByRole("button", { name: "Open operator menu" }));
-    expect(screen.getByRole("link", { name: "Sign out" })).toHaveAttribute("href", "/cdn-cgi/access/logout");
+    expect(screen.getByRole("button", { name: "Sign out" }).closest("form")).toHaveAttribute("action", "/auth/logout");
+    expect(screen.getByRole("button", { name: "Sign out" }).closest("form")).toHaveAttribute("method", "post");
   });
 
   it("explains degraded state when workload evidence is unavailable", async () => {
     const provider: MonitoringProvider = {
+      ...fixtureProvider,
       async getOverview(environment, timeRange) {
         const fixture = await fixtureProvider.getOverview(environment, timeRange);
         return {
@@ -358,6 +415,7 @@ describe("enterprise application shell", () => {
     const user = userEvent.setup();
     renderApp();
 
+    await screen.findByRole("heading", { name: "Fleet overview" });
     await user.click(screen.getByRole("button", { name: /Search workspace/ }));
     await user.type(screen.getByRole("searchbox"), "no-such-command");
     expect(screen.getByText("No matching pages or services.")).toBeInTheDocument();
@@ -373,7 +431,7 @@ describe("enterprise application shell", () => {
     );
     expect(await screen.findByRole("heading", { name: "Infrastructure" })).toBeInTheDocument();
     expect(screen.getByText("Dependency topology")).toBeInTheDocument();
-    expect(await screen.findByLabelText("Dependency relationships")).toHaveTextContent("Prometheus");
+    await waitFor(() => expect(screen.getByLabelText("Dependency relationships")).toHaveTextContent("Prometheus"));
     expect(await screen.findByRole("heading", { name: "Kubernetes inventory" })).toBeInTheDocument();
     unmount();
 
@@ -398,6 +456,7 @@ describe("enterprise application shell", () => {
 
   it("disables Kubernetes search when its credential is unavailable", async () => {
     const provider: MonitoringProvider = {
+      ...fixtureProvider,
       getOverview(environment, timeRange) { return fixtureProvider.getOverview(environment, timeRange); },
       getPerformance(environment, serviceId, timeRange) { return fixtureProvider.getPerformance(environment, serviceId, timeRange); },
       getTopology(environment) {

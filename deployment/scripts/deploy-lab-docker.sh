@@ -355,6 +355,14 @@ validate_runtime_environment() {
         MONITORING_GID
         MONITORING_DATA_DIR
         GRAFANA_ADMIN_PASSWORD_FILE
+        OIDC_ISSUER_URL
+        OIDC_CLIENT_ID
+        OIDC_SCOPES
+        OIDC_ROLE_CLAIM
+        OIDC_DISPLAY_NAME_CLAIM
+        OIDC_VIEWER_GROUP
+        OIDC_OPERATOR_GROUP
+        OIDC_ADMINISTRATOR_GROUP
     )
     local key
     local value
@@ -372,6 +380,7 @@ validate_runtime_environment() {
     [[ "$(env_value MONITORING_BIND_ADDRESS)" == "127.0.0.1" ]] || fail "MONITORING_BIND_ADDRESS must remain 127.0.0.1 for the Cloudflare tunnel profile."
     [[ "$(env_value MONITORING_PUBLIC_HOST)" == "monitor.jefferyhaynes.net" ]] || fail "MONITORING_PUBLIC_HOST must be monitor.jefferyhaynes.net for this lab profile."
     [[ "$(env_value MONITORING_PUBLIC_URL)" == "https://monitor.jefferyhaynes.net" ]] || fail "MONITORING_PUBLIC_URL must be https://monitor.jefferyhaynes.net."
+    [[ "$(env_value OIDC_ISSUER_URL)" == https://* ]] || fail "OIDC_ISSUER_URL must use HTTPS."
     value="$(env_value MONITORING_UID)"
     [[ "$value" =~ ^[0-9]+$ && "$value" != "0" ]] || fail "MONITORING_UID must be a non-zero numeric host user ID."
     value="$(env_value MONITORING_GID)"
@@ -460,8 +469,31 @@ validate_kubernetes_credential() {
     local data_directory
     data_directory="$(resolve_env_path "$(env_value MONITORING_DATA_DIR)")"
     local token_file="$data_directory/runtime-secrets/kubernetes_inventory_token"
-    [[ -s "$token_file" ]] || \
-        fail "Kubernetes inventory credential is missing or empty: $token_file. Create the read-only service-account token before preflight or deploy."
+    validate_locked_secret "Kubernetes inventory credential" "$token_file"
+}
+
+validate_locked_secret() {
+    local name="$1"
+    local path="$2"
+    [[ -s "$path" ]] || fail "$name is missing or empty: $path"
+    local metadata
+    if metadata="$(stat -c '%a %u' "$path" 2>/dev/null)"; then
+        :
+    else
+        metadata="$(stat -f '%Lp %u' "$path" 2>/dev/null)" || fail "Unable to inspect permissions for $name: $path"
+    fi
+    [[ "$metadata" == "400 10001" ]] || fail "$name must be owned by UID 10001 with mode 0400: $path"
+}
+
+validate_identity_credentials() {
+    local data_directory
+    data_directory="$(resolve_env_path "$(env_value MONITORING_DATA_DIR)")"
+    local client_secret="$data_directory/runtime-secrets/oidc_client_secret"
+    local session_keyring="$data_directory/runtime-secrets/auth_session_keyring"
+    validate_locked_secret "OIDC client secret" "$client_secret"
+    validate_locked_secret "Authentication session keyring" "$session_keyring"
+    grep -Eq '"version"[[:space:]]*:[[:space:]]*1' "$session_keyring" || \
+        fail "Authentication session keyring does not declare supported version 1: $session_keyring"
 }
 
 verify_http() {
@@ -488,69 +520,39 @@ fetch_http() {
     printf '%s' "$response"
 }
 
+verify_unauthenticated_http() {
+    local name="$1"
+    local url="$2"
+    local expected_status="$3"
+    local actual_status
+    actual_status="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{http_code}' "$url")" || \
+        fail "$name request failed: $url"
+    [[ "$actual_status" == "$expected_status" ]] || \
+        fail "$name must fail closed with HTTP $expected_status for an anonymous request; received HTTP $actual_status."
+}
+
 verify_portal_routes() {
     local routes=("/" "/deployments" "/services/cpq-demo" "/infrastructure" "/performance" "/incidents" "/logs" "/settings")
     local route
-    local html
     for route in "${routes[@]}"; do
-        html="$(fetch_http "Portal route $route" "http://127.0.0.1:3100${route}")"
-        grep -Fq '<title>Workspace Monitor</title>' <<< "$html" || \
-            fail "Portal route did not return the application shell: $route"
+        verify_unauthenticated_http "Portal route $route" "http://127.0.0.1:3100${route}" 302
     done
-
-    local asset_path
-    asset_path="$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' <<< "$html" | head -n 1)"
-    [[ -n "$asset_path" ]] || fail "Portal index did not reference its versioned JavaScript asset."
-    local bundle
-    bundle="$(fetch_http "Portal application asset" "http://127.0.0.1:3100${asset_path}")"
-    grep -Fq 'Live inventory' <<< "$bundle" || \
-        fail "Portal bundle does not contain the required live-inventory disclosure."
-    grep -Fq 'Prometheus telemetry' <<< "$bundle" || \
-        fail "Portal bundle does not contain the required Prometheus performance interface."
-    grep -Fq 'Kubernetes inventory' <<< "$bundle" || \
-        fail "Portal bundle does not contain the required infrastructure topology interface."
-    grep -Fq 'Logs & events' <<< "$bundle" || \
-        fail "Portal bundle does not contain the required log and event correlation interface."
-    grep -Fq 'Server-side redaction applied' <<< "$bundle" || \
-        fail "Portal bundle does not contain the required log-redaction disclosure."
-
-    local inventory
-    inventory="$(fetch_http "Inventory API" "http://127.0.0.1:3100/api/v1/inventory?environment=all")"
-    grep -Fq '"apiVersion":1' <<< "$inventory" || fail "Inventory API response has no supported API version."
-    grep -Fq '"id":"cpq-demo"' <<< "$inventory" || fail "Inventory API response is missing CPQ Demo."
-    grep -Fq '"id":"portfolio"' <<< "$inventory" || fail "Inventory API response is missing the portfolio site."
-    local topology
-    topology="$(fetch_http "Topology API" "http://127.0.0.1:3100/api/v1/topology?environment=all")"
-    grep -Fq '"apiVersion":1' <<< "$topology" || fail "Topology API response has no supported API version."
-    grep -Fq '"name":"kubernetes"' <<< "$topology" || fail "Topology API response is missing its Kubernetes source label."
-    grep -Fq '"kind":"Node"' <<< "$topology" || fail "Topology API response contains no node inventory; review the read-only RBAC binding."
-    local performance
-    performance="$(fetch_http "Performance API" "http://127.0.0.1:3100/api/v1/performance?environment=demo&service=cpq-demo&range=1h")"
-    grep -Fq '"apiVersion":1' <<< "$performance" || fail "Performance API response has no supported API version."
-    grep -Fq '"serviceId":"cpq-demo"' <<< "$performance" || fail "Performance API response did not retain the selected service."
-    grep -Fq '"id":"request-rate"' <<< "$performance" || fail "Performance API response is missing request-rate telemetry."
-    local portfolio_performance
-    portfolio_performance="$(fetch_http "Portfolio performance API" "http://127.0.0.1:3100/api/v1/performance?environment=portfolio&service=portfolio&range=1h")"
-    grep -Fq '"serviceId":"portfolio"' <<< "$portfolio_performance" || fail "Performance API response did not retain the portfolio service."
-    grep -Eq '"id":"request-total"[^}]*"status":"ok"' <<< "$portfolio_performance" || \
-        fail "Portfolio request-total telemetry is unavailable; deploy the private Nginx exporter before the monitoring stack."
-    local incidents
-    incidents="$(fetch_http "Incident API" "http://127.0.0.1:3100/api/v1/incidents?environment=all&status=active")"
-    grep -Fq '"apiVersion":1' <<< "$incidents" || fail "Incident API response has no supported API version."
-    grep -Fq '"name":"inventory-health-evaluator"' <<< "$incidents" || fail "Incident API response is missing its live alert source."
-    grep -Fq '"state":"unconfigured"' <<< "$incidents" || fail "Incident API must disclose that notifications are unconfigured."
-    local logs
-    logs="$(fetch_http "Log correlation API" "http://127.0.0.1:3100/api/v1/logs?environment=demo&service=cpq-demo&range=1h")"
-    grep -Fq '"apiVersion":1' <<< "$logs" || fail "Log correlation API response has no supported API version."
-    grep -Fq '"id":"cpq-demo"' <<< "$logs" || fail "Log correlation API response did not retain the selected service."
-    grep -Fq '"name":"kubernetes-pod-logs","availability":"available"' <<< "$logs" || \
-        fail "Kubernetes pod logs are unavailable; separately apply and verify the reviewed pods/log RBAC rule."
-    grep -Fq '"name":"kubernetes-events","availability":"available"' <<< "$logs" || fail "Kubernetes event correlation is unavailable."
-    grep -Fq '"applied":true' <<< "$logs" || fail "Log correlation API response does not declare server-side redaction."
-    local source_evidence
-    source_evidence="$(fetch_http "Internal Gatus evidence proxy" "http://127.0.0.1:3100/tools/gatus-internal/api/v1/endpoints/statuses")"
-    grep -Fq 'cpq-demo-ready-internal' <<< "$source_evidence" || fail "Internal Gatus evidence proxy is missing CPQ Demo."
-    grep -Fq 'portfolio-home-internal' <<< "$source_evidence" || fail "Internal Gatus evidence proxy is missing the portfolio site."
+    local protected_endpoints=(
+        "/api/v1/session"
+        "/api/v1/inventory?environment=all"
+        "/api/v1/topology?environment=all"
+        "/api/v1/performance?environment=demo&service=cpq-demo&range=1h"
+        "/api/v1/performance?environment=portfolio&service=portfolio&range=1h"
+        "/api/v1/incidents?environment=all&status=active"
+        "/api/v1/logs?environment=demo&service=cpq-demo&range=1h"
+        "/tools/gatus-internal/api/v1/endpoints/statuses"
+    )
+    local endpoint
+    for endpoint in "${protected_endpoints[@]}"; do
+        verify_unauthenticated_http "Protected endpoint $endpoint" "http://127.0.0.1:3100${endpoint}" 401
+    done
+    verify_unauthenticated_http "OIDC login start" "http://127.0.0.1:3100/auth/login" 302
+    echo "Anonymous portal, monitoring API, and source-tool access fails closed. Authenticated browser acceptance is required to validate role-scoped evidence."
 }
 
 verify_portal_container_health() {
@@ -605,6 +607,7 @@ case "$COMMAND" in
     preflight)
         validate_runtime_environment
         validate_kubernetes_credential
+        validate_identity_credentials
         validate_portal_sources
         validate_compose
         docker info >/dev/null
@@ -621,6 +624,7 @@ case "$COMMAND" in
         validate_portal_port
         prepare_runtime_data
         validate_kubernetes_credential
+        validate_identity_credentials
         echo "Pulling pinned images for the single-host lab profile..."
         compose pull prometheus grafana blackbox-exporter node-exporter cadvisor gatus-internal gatus-public-path
         echo "Building portal and inventory API images for revision ${PORTAL_BUILD_REVISION}..."
@@ -638,6 +642,7 @@ case "$COMMAND" in
     verify)
         validate_runtime_environment
         validate_kubernetes_credential
+        validate_identity_credentials
         validate_compose
         verify_stack
         ;;

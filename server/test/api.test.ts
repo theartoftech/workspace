@@ -5,7 +5,7 @@ import type { LogCorrelationSnapshot, LogQuery } from "../../shared/logs";
 import type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListResponse, IncidentSummary, IncidentTransitionCommand } from "../../shared/incidents";
 import type { PerformanceSnapshot } from "../../shared/performance";
 import type { TopologySnapshot } from "../../shared/topology";
-import { createInventoryHttpServer, handleInventoryRequest, safeNodeRequestMethod, type IncidentOperations, type InventoryReader, type PerformanceReader } from "../src/api";
+import { createInventoryHttpServer, handleInventoryRequest, safeNodeRequestMethod, type IncidentOperations, type InventoryReader, type PerformanceReader, type WorkspaceAuthentication } from "../src/api";
 import { IncidentRequestError } from "../src/incidents";
 import { InventoryAggregator } from "../src/inventory";
 import { LogRequestError, type LogReader } from "../src/logs";
@@ -52,7 +52,7 @@ const incidentList: IncidentListResponse = {
   summary: { total: 1, active: 1, resolved: 0, unacknowledged: 1, silenced: 0 },
   alertSource: { name: "inventory-health-evaluator", availability: "available", evaluatedAt: "2026-08-14T14:00:00Z", message: null },
   notification: { state: "unconfigured", message: "No destination configured." },
-  operator: { id: "lab-operator", identityMode: "configured-lab-operator" }, incidents: [incidentSummary]
+  operator: { id: "oidc:lab-operator", displayName: "Lab Operator", role: "operator", identityMode: "authenticated-session" }, incidents: [incidentSummary]
 };
 const incidentDetail: IncidentDetailResponse = {
   apiVersion: 1, assembledAt: "2026-08-14T14:00:00Z", notification: incidentList.notification, operator: incidentList.operator,
@@ -69,6 +69,19 @@ const incidentOperations: IncidentOperations = {
   transition(_id: string, command: IncidentTransitionCommand): Promise<IncidentDetailResponse> {
     return Promise.resolve({ ...incidentDetail, incident: { ...incidentSummary, version: command.expectedVersion + 1 } });
   }
+};
+const workspaceAuthentication: WorkspaceAuthentication = {
+  publicOrigin: "https://monitor.jefferyhaynes.net",
+  startLogin: () => Promise.resolve({ authorizationUrl: "https://identity.example.test/authorize", transactionCookie: "transaction=cookie" }),
+  completeLoginQuery: () => Promise.reject(new Error("not used")),
+  authenticate: () => Promise.resolve({
+    user: { id: "oidc:operator", displayName: "Lab Operator", role: "operator" },
+    expiresAt: "2026-08-17T00:00:00.000Z",
+    idleExpiresAt: "2026-08-16T13:00:00.000Z"
+  }),
+  logout: () => Promise.resolve({ clearSessionCookie: "session=; Max-Age=0", redirectTo: "https://monitor.jefferyhaynes.net/", providerLogoutAvailable: false }),
+  recordAuthorizationDenied: () => undefined,
+  listAudit: () => []
 };
 
 const logSnapshot: LogCorrelationSnapshot = {
@@ -342,7 +355,7 @@ describe("read-only inventory API", () => {
   });
 
   it("runs the Node server adapter and enforces the wire body limit", async () => {
-    const server = createInventoryHttpServer(reader, performanceReader, topologyReader, incidentOperations);
+    const server = createInventoryHttpServer(workspaceAuthentication, reader, performanceReader, topologyReader, incidentOperations);
     expect(server.listening).toBe(false);
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -354,14 +367,14 @@ describe("read-only inventory API", () => {
       const base = `http://127.0.0.1:${address.port}`;
       const declaration = await fetch(`${base}/api/v1/incidents`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Origin: workspaceAuthentication.publicOrigin, "Sec-Fetch-Site": "same-origin" },
         body: JSON.stringify({ serviceId: "cpq-demo", title: "Wire declaration", severity: "P2", reason: "Adapter test" })
       });
       expect(declaration.status).toBe(201);
 
       const oversized = await fetch(`${base}/api/v1/incidents`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Origin: workspaceAuthentication.publicOrigin, "Sec-Fetch-Site": "same-origin" },
         body: JSON.stringify({ value: "x".repeat(17_000) })
       });
       expect(oversized.status).toBe(413);

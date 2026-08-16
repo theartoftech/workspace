@@ -20,8 +20,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
-import { createLiveMonitoringProvider } from "../data/provider";
-import type { EnvironmentId, IncidentListResponse, MonitoringProvider, OverviewSnapshot, TimeRange } from "../data/types";
+import { MonitoringRequestError, createLiveMonitoringProvider } from "../data/provider";
+import type { EnvironmentId, IncidentListResponse, MonitoringProvider, OverviewSnapshot, SessionResponse, TimeRange, WorkspaceRole } from "../data/types";
 import {
   DeploymentsPage,
   IncidentsPage,
@@ -150,6 +150,29 @@ function ErrorShell({ message }: { readonly message: string }): React.JSX.Elemen
   return <section className="error-shell" role="alert"><WarningOctagonIcon aria-hidden="true" size={28} /><h1>Monitoring shell unavailable</h1><p>{message}</p></section>;
 }
 
+function AuthenticationShell({ status, message, returnTo }: { readonly status: number; readonly message: string; readonly returnTo: string }): React.JSX.Element {
+  const anonymous = status === 401;
+  return (
+    <main className="authentication-shell" id="main-content">
+      <section className="error-shell" role="alert">
+        <WarningOctagonIcon aria-hidden="true" size={28} />
+        <h1>{anonymous ? "Authentication required" : status === 503 ? "Identity provider unavailable" : "Authentication unavailable"}</h1>
+        <p>{message}</p>
+        {anonymous && <a className="primary-button" href={`/auth/login?returnTo=${encodeURIComponent(returnTo)}`}>Sign in</a>}
+      </section>
+    </main>
+  );
+}
+
+function displayRole(role: WorkspaceRole): string {
+  return role === "administrator" ? "Administrator" : role === "operator" ? "Operator" : "Viewer";
+}
+
+function userInitials(displayName: string): string {
+  const initials = displayName.trim().split(/\s+/u).slice(0, 2).map((part) => part.at(0)?.toUpperCase() ?? "").join("");
+  return initials === "" ? "?" : initials;
+}
+
 export function App({ provider = liveProvider }: { readonly provider?: MonitoringProvider }): React.JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
@@ -159,6 +182,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
     return requested === "15m" || requested === "1h" || requested === "6h" || requested === "24h" ? requested : "1h";
   });
   const [snapshot, setSnapshot] = useState<OverviewSnapshot | null>(null);
+  const [session, setSession] = useState<SessionResponse | null>(null);
+  const [authenticationFailure, setAuthenticationFailure] = useState<{ readonly status: number; readonly message: string } | null>(null);
   const [activeIncidents, setActiveIncidents] = useState<IncidentListResponse | null>(null);
   const [incidentError, setIncidentError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -172,6 +197,23 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
 
   useEffect(() => {
     let active = true;
+    setSession(null);
+    setAuthenticationFailure(null);
+    void provider.getSession().then((response) => {
+      if (active) setSession(response);
+    }).catch((cause: unknown) => {
+      if (!active) return;
+      setAuthenticationFailure({
+        status: cause instanceof MonitoringRequestError ? cause.status : 0,
+        message: cause instanceof Error ? cause.message : "The authenticated session could not be validated."
+      });
+    });
+    return () => { active = false; };
+  }, [provider]);
+
+  useEffect(() => {
+    if (session === null) return;
+    let active = true;
     setSnapshot(null);
     setError(null);
     provider.getOverview(environment, timeRange)
@@ -182,9 +224,10 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
         if (active) setError(cause instanceof Error ? cause.message : "Unknown monitoring provider error");
       });
     return () => { active = false; };
-  }, [environment, provider, timeRange]);
+  }, [environment, provider, session, timeRange]);
 
   useEffect(() => {
+    if (session === null) return;
     let active = true;
     if (provider.getIncidents === undefined) {
       setActiveIncidents(null);
@@ -198,9 +241,10 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
         if (active) { setActiveIncidents(null); setIncidentError(cause instanceof Error ? cause.message : "Unknown incident provider error"); }
       });
     return () => { active = false; };
-  }, [environment, incidentRefreshKey, provider]);
+  }, [environment, incidentRefreshKey, provider, session]);
 
   function refreshMonitoringData(): void {
+    if (session === null) return;
     setRefreshKey((value) => value + 1);
     setIncidentRefreshKey((value) => value + 1);
     setRefreshedAt(new Date());
@@ -234,6 +278,14 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
   }, [location.pathname]);
 
   const routeSnapshot = useMemo<OverviewSnapshot | null>(() => snapshot, [snapshot]);
+  const returnTo = `${location.pathname}${location.search}`;
+
+  if (authenticationFailure !== null) {
+    return <AuthenticationShell status={authenticationFailure.status} message={authenticationFailure.message} returnTo={returnTo} />;
+  }
+  if (session === null) {
+    return <main className="authentication-shell" id="main-content"><LoadingShell /></main>;
+  }
 
   return (
     <div className="app-shell">
@@ -260,8 +312,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
               {alertsOpen && <div className="utility-popover alerts-popover"><strong>Active alerts</strong>{incidentError !== null ? <p>{incidentError}</p> : activeIncidents === null ? <p>Loading incidents…</p> : activeIncidents.incidents.length === 0 ? <p>No active incidents.</p> : activeIncidents.incidents.slice(0, 5).map((incident) => <button type="button" key={incident.id} onClick={() => { setAlertsOpen(false); void navigate("/incidents"); }}><span className={`alert-dot alert-dot-${incident.severity === "P1" ? "critical" : "warning"}`} />{incident.title}<small>{incident.serviceName} · {incident.severity}</small></button>)}</div>}
             </div>
             <div className="popover-anchor operator-anchor">
-              <button className="operator-button" type="button" aria-label="Open operator menu" aria-expanded={operatorOpen} onClick={() => setOperatorOpen((value) => !value)}><span>JH</span><div><strong>J. Haynes</strong><small>Administrator</small></div><CaretDownIcon aria-hidden="true" size={13} /></button>
-              {operatorOpen && <div className="utility-popover operator-popover"><button type="button">Operator profile</button><button type="button">Keyboard shortcuts</button><a href="/cdn-cgi/access/logout">Sign out</a></div>}
+              <button className="operator-button" type="button" aria-label="Open operator menu" aria-expanded={operatorOpen} onClick={() => setOperatorOpen((value) => !value)}><span>{userInitials(session.user.displayName)}</span><div><strong>{session.user.displayName}</strong><small>{displayRole(session.user.role)}</small></div><CaretDownIcon aria-hidden="true" size={13} /></button>
+              {operatorOpen && <div className="utility-popover operator-popover"><button type="button">Operator profile</button><button type="button">Keyboard shortcuts</button><form method="post" action="/auth/logout"><button type="submit">Sign out</button></form></div>}
             </div>
           </div>
         </header>
@@ -282,7 +334,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
               <Route path="/deployments" element={<DeploymentsPage snapshot={routeSnapshot} />} />
               <Route path="/infrastructure" element={<InfrastructurePage snapshot={routeSnapshot} provider={provider} environment={environment} refreshKey={refreshKey} />} />
               <Route path="/performance" element={<PerformancePage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
-              <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} provider={provider} environment={environment} timeRange={timeRange} refreshKey={incidentRefreshKey} onMutated={() => setIncidentRefreshKey((value) => value + 1)} />} />
+              <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} provider={provider} environment={environment} timeRange={timeRange} refreshKey={incidentRefreshKey} role={session.user.role} onMutated={() => setIncidentRefreshKey((value) => value + 1)} />} />
               <Route path="/logs" element={<LogsPage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<ErrorShell message="The requested monitoring route does not exist." />} />

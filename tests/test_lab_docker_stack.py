@@ -38,6 +38,27 @@ def write_executable(path: Path, source: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def provision_identity_runtime(temporary: Path) -> tuple[str, ...]:
+    secret_directory = temporary / "data" / "runtime-secrets"
+    secret_directory.mkdir(parents=True, exist_ok=True)
+    (secret_directory / "oidc_client_secret").write_text("test-client-secret\n", encoding="utf-8")
+    (secret_directory / "auth_session_keyring").write_text(
+        '{"version":1,"activeKeyId":"test-key","keys":[{"id":"test-key","secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}\n',
+        encoding="utf-8",
+    )
+    write_executable(temporary / "stat", "#!/usr/bin/env bash\nprintf '400 10001\\n'\n")
+    return (
+        "OIDC_ISSUER_URL=https://identity.example.test/realms/workspace-monitor",
+        "OIDC_CLIENT_ID=workspace-monitor",
+        "OIDC_SCOPES=openid profile",
+        "OIDC_ROLE_CLAIM=groups",
+        "OIDC_DISPLAY_NAME_CLAIM=preferred_username",
+        "OIDC_VIEWER_GROUP=/workspace-monitor/viewer",
+        "OIDC_OPERATOR_GROUP=/workspace-monitor/operator",
+        "OIDC_ADMINISTRATOR_GROUP=/workspace-monitor/administrator",
+    )
+
+
 class DeploymentTestHarnessTests(unittest.TestCase):
     def test_script_runner_closes_stdin_and_enforces_a_timeout(self) -> None:
         completed = subprocess.CompletedProcess(["bash"], 0, "", "")
@@ -159,6 +180,7 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertRegex(dockerfile, r"FROM node:[^\s]+@sha256:[0-9a-f]{64} AS build")
         self.assertIn("RUN npm ci --ignore-scripts", dockerfile)
         self.assertIn("RUN npm run build:server", dockerfile)
+        self.assertIn("RUN npm ci --omit=dev --ignore-scripts", dockerfile)
         self.assertIn("USER 10001:10001", dockerfile)
         self.assertIn("server/src/main.js", dockerfile)
         self.assertIn("dockerfile: deploy/inventory-api/Dockerfile", api)
@@ -174,10 +196,21 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn("PROMETHEUS_API_URL: http://prometheus:9090", api)
         self.assertIn('PROMETHEUS_CONCURRENCY: "4"', api)
         self.assertIn("INCIDENT_DATABASE_PATH: /var/lib/workspace-monitor/incidents.sqlite", api)
-        self.assertIn("INCIDENT_OPERATOR_ID: jhaynes", api)
+        self.assertNotIn("INCIDENT_OPERATOR_ID", api)
+        self.assertIn("AUTH_PUBLIC_ORIGIN: ${MONITORING_PUBLIC_URL}", api)
+        self.assertIn("OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}", api)
+        self.assertIn("OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}", api)
+        self.assertIn("OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret", api)
+        self.assertIn("AUTH_SESSION_DATABASE_PATH: /var/lib/workspace-monitor/auth.sqlite", api)
+        self.assertIn("AUTH_SESSION_KEYRING_FILE: /run/secrets/auth_session_keyring", api)
+        self.assertIn("OIDC_VIEWER_GROUP: ${OIDC_VIEWER_GROUP}", api)
+        self.assertIn("OIDC_OPERATOR_GROUP: ${OIDC_OPERATOR_GROUP}", api)
+        self.assertIn("OIDC_ADMINISTRATOR_GROUP: ${OIDC_ADMINISTRATOR_GROUP}", api)
         self.assertIn('INCIDENT_EVALUATION_INTERVAL_SECONDS: "30"', api)
         self.assertIn("depends_on:\n      - prometheus", api)
-        self.assertIn("runtime-secrets:/run/secrets:ro", api)
+        self.assertNotIn("runtime-secrets:/run/secrets:ro", api)
+        for secret_name in ("kubernetes_inventory_token", "oidc_client_secret", "auth_session_keyring"):
+            self.assertIn(f"runtime-secrets/{secret_name}:/run/secrets/{secret_name}:ro", api)
         self.assertIn("${MONITORING_DATA_DIR}/incidents:/var/lib/workspace-monitor", api)
         self.assertIn("mem_limit: 128m", api)
         self.assertIn("cpus: 0.25", api)
@@ -215,10 +248,20 @@ class PortalPackagingContractTests(unittest.TestCase):
         self.assertIn('return 200 "healthy\\n"', nginx)
         self.assertIn("try_files $uri $uri/ /index.html", nginx)
         self.assertIn("location /api/", nginx)
+        self.assertIn("location /auth/", nginx)
+        self.assertIn("location = /auth/callback", nginx)
+        self.assertIn("access_log off", nginx.split("location = /auth/callback", maxsplit=1)[1].split("}", maxsplit=1)[0])
+        self.assertIn("location = /_auth/check", nginx)
+        self.assertIn("internal", nginx.split("location = /_auth/check", maxsplit=1)[1].split("}", maxsplit=1)[0])
+        self.assertIn("/api/v1/auth-check", nginx)
+        self.assertGreaterEqual(nginx.count("auth_request /_auth/check"), 3)
+        self.assertIn("error_page 401 = @oidc_login", nginx)
+        self.assertIn("return 302 /auth/login", nginx)
         self.assertIn("proxy_pass http://inventory-api:3001", nginx)
         self.assertIn("client_max_body_size 16k", nginx)
         self.assertIn("location /tools/gatus-internal/", nginx)
         self.assertIn("location /tools/gatus-public-path/", nginx)
+        self.assertNotIn("/cdn-cgi/access/logout", nginx)
         self.assertIn("public, max-age=31536000, immutable", nginx)
         self.assertIn('default "no-store"', nginx)
         for header in (
@@ -321,6 +364,7 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
             token_file = temporary / "data" / "runtime-secrets" / "kubernetes_inventory_token"
             token_file.parent.mkdir(parents=True)
             token_file.write_text("test-read-only-token\n", encoding="utf-8")
+            identity_environment = provision_identity_runtime(temporary)
             environment_file = temporary / ".env"
             environment_file.write_text(
                 "\n".join(
@@ -333,6 +377,7 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
                         f"MONITORING_DATA_DIR={temporary / 'data'}",
                         f"MONITORING_ENV_FILE={environment_file}",
                         f"GRAFANA_ADMIN_PASSWORD_FILE={password_file}",
+                        *identity_environment,
                     )
                 )
                 + "\n",
@@ -358,6 +403,7 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
             token_file = temporary / "data" / "runtime-secrets" / "kubernetes_inventory_token"
             token_file.parent.mkdir(parents=True)
             token_file.write_text("test-read-only-token\n", encoding="utf-8")
+            identity_environment = provision_identity_runtime(temporary)
             environment_file = temporary / ".env"
             environment_file.write_text(
                 "\n".join(
@@ -370,6 +416,7 @@ class SingleHostDeploymentScriptTests(unittest.TestCase):
                         f"MONITORING_DATA_DIR={temporary / 'data'}",
                         f"MONITORING_ENV_FILE={environment_file}",
                         f"GRAFANA_ADMIN_PASSWORD_FILE={password_file}",
+                        *identity_environment,
                     )
                 )
                 + "\n",
@@ -534,34 +581,25 @@ exit 1
         for route in ("/", "/deployments", "/infrastructure", "/performance", "/incidents", "/logs", "/settings"):
             self.assertIn(f'"{route}"', source)
         self.assertIn("/api/v1/inventory?environment=all", source)
-        self.assertIn("/api/v1/performance?environment=demo&service=cpq-demo&range=1h", source)
-        self.assertIn("/api/v1/performance?environment=portfolio&service=portfolio&range=1h", source)
+        self.assertIn("/api/v1/session", source)
+        self.assertIn("verify_unauthenticated_http", source)
         self.assertIn("--force-recreate gatus-internal gatus-public-path", source)
         self.assertIn("kubernetes_inventory_token", source)
         self.assertIn("/api/v1/topology?environment=all", source)
         self.assertIn("/api/v1/incidents?environment=all&status=active", source)
         self.assertIn("/api/v1/logs?environment=demo&service=cpq-demo&range=1h", source)
-        self.assertIn('"name":"kubernetes-pod-logs","availability":"available"', source)
-        self.assertIn('"applied":true', source)
-        self.assertIn('"state":"unconfigured"', source)
-        self.assertIn('"apiVersion":1', source)
-        self.assertIn('"serviceId":"cpq-demo"', source)
-        self.assertIn('"id":"request-rate"', source)
-        self.assertIn('"id":"request-total"', source)
-        self.assertIn("portfolio-home-internal", source)
         self.assertIn("/tools/gatus-internal/api/v1/endpoints/statuses", source)
-        self.assertIn("Live inventory", source)
-        self.assertIn("Prometheus telemetry", source)
-        self.assertIn("Kubernetes inventory", source)
-        self.assertIn("Logs & events", source)
+        self.assertIn("Authenticated browser acceptance is required", source)
+        self.assertIn("validate_identity_credentials", source)
         self.assertIn("validate_portal_port", source)
 
-    def test_deploy_prepares_bounded_persistent_incident_storage(self) -> None:
+    def test_deploy_prepares_bounded_persistent_incident_and_session_storage(self) -> None:
         source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn('"$data_directory/incidents"', source)
         self.assertIn('chmod 0770 "$data_directory/incidents"', source)
         self.assertIn('chgrp "$(env_value MONITORING_GID)" "$data_directory/incidents"', source)
+        self.assertIn("auth.sqlite", (STACK_DIR / "compose.yaml").read_text(encoding="utf-8"))
         self.assertIn("PORTAL_BUILD_REVISION", source)
 
     def test_remote_preflight_cleanup_exits_successfully(self) -> None:
@@ -588,6 +626,7 @@ exit 1
             token_file = temporary / "data" / "runtime-secrets" / "kubernetes_inventory_token"
             token_file.parent.mkdir(parents=True)
             token_file.write_text("test-read-only-token\n", encoding="utf-8")
+            identity_environment = provision_identity_runtime(temporary)
             environment_file = temporary / ".env"
             environment_file.write_text(
                 "\n".join(
@@ -600,6 +639,7 @@ exit 1
                         f"MONITORING_DATA_DIR={temporary / 'data'}",
                         f"MONITORING_ENV_FILE={environment_file}",
                         f"GRAFANA_ADMIN_PASSWORD_FILE={password_file}",
+                        *identity_environment,
                     )
                 )
                 + "\n",
@@ -622,6 +662,11 @@ count=0
 count=$((count + 1))
 printf '%s' "$count" > "$MONITORING_CURL_COUNT"
 if (( count < 3 )); then exit 1; fi
+if [[ " $* " == *" --write-out "* ]]; then
+    if [[ " $* " == *"/api/v1/"* || " $* " == *"/tools/"* ]]; then printf '401';
+    else printf '302'; fi
+    exit 0
+fi
 if [[ " $* " == *"/tools/gatus-internal/api/v1/endpoints/statuses"* ]]; then
     printf '[{"name":"cpq-demo-ready-internal"},{"name":"portfolio-home-internal"}]'
 elif [[ " $* " == *"/api/v1/inventory?environment=all"* ]]; then

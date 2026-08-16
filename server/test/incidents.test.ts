@@ -6,11 +6,13 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { InventorySnapshot, ServiceInventory } from "../../shared/inventory";
-import type { DeclareIncidentCommand, IncidentDetailResponse, IncidentTransitionCommand } from "../../shared/incidents";
+import type { SessionUser } from "../../shared/auth";
+import type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListResponse, IncidentTransitionCommand } from "../../shared/incidents";
 import { IncidentRequestError, IncidentOperationsService, SqliteIncidentRepository } from "../src/incidents";
 import { catalogFixture } from "./fixtures";
 
 const temporaryDirectories: string[] = [];
+const operator: SessionUser = { id: "oidc:operator", displayName: "Lab Operator", role: "operator" };
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -76,7 +78,13 @@ function inventory(state: ServiceInventory["state"]): InventorySnapshot {
 
 interface Harness {
   readonly repository: SqliteIncidentRepository;
-  readonly service: IncidentOperationsService;
+  readonly service: {
+    evaluate(): Promise<void>;
+    list(environment: string, status: string): Promise<IncidentListResponse>;
+    getDetail(id: string): Promise<IncidentDetailResponse>;
+    declare(command: DeclareIncidentCommand): Promise<IncidentDetailResponse>;
+    transition(id: string, command: IncidentTransitionCommand): Promise<IncidentDetailResponse>;
+  };
   setInventory(snapshot: InventorySnapshot): void;
   failInventory(): void;
   setNow(value: string): void;
@@ -91,10 +99,9 @@ function harness(path = databasePath()): Harness {
   const repository = new SqliteIncidentRepository({
     databasePath: path,
     catalog: catalogFixture,
-    clock: () => now,
-    operatorId: "lab-operator"
+    clock: () => now
   });
-  const service = new IncidentOperationsService({
+  const operations = new IncidentOperationsService({
     repository,
     inventoryReader: {
       async getInventory(): Promise<InventorySnapshot> {
@@ -107,7 +114,13 @@ function harness(path = databasePath()): Harness {
   });
   return {
     repository,
-    service,
+    service: {
+      evaluate: () => operations.evaluate(),
+      list: (environment, status) => operations.list(environment, status, operator),
+      getDetail: (id) => operations.getDetail(id, operator),
+      declare: (command) => operations.declare(command, operator),
+      transition: (id, command) => operations.transition(id, command, operator)
+    },
     setInventory(snapshot) { currentInventory = snapshot; inventoryError = null; },
     failInventory() { inventoryError = new Error("authorization=Bearer must-not-leak"); },
     setNow(value) { now = new Date(value); },
@@ -148,14 +161,14 @@ describe("persistent incident operations", () => {
       severity: "P2",
       reason: "Operator confirmed customer impact"
     });
-    expect(declared.incident).toMatchObject({ status: "active", declaredBy: "lab-operator", version: 1 });
+    expect(declared.incident).toMatchObject({ status: "active", declaredBy: "Lab Operator", version: 1 });
 
     const acknowledged = await current.service.transition(declared.incident.id, {
       action: "acknowledge",
       expectedVersion: 1,
       reason: "Taking incident command"
     });
-    expect(acknowledged.incident).toMatchObject({ acknowledgedBy: "lab-operator", version: 2 });
+    expect(acknowledged.incident).toMatchObject({ acknowledgedBy: "Lab Operator", version: 2 });
 
     const resolved = await current.service.transition(declared.incident.id, {
       action: "resolve",
@@ -164,7 +177,9 @@ describe("persistent incident operations", () => {
     });
     expect(resolved.incident).toMatchObject({ status: "resolved", version: 3 });
     expect(resolved.audit.map((event) => event.action)).toEqual(["created", "acknowledged", "resolved"]);
-    expect(resolved.audit.map((event) => event.actor)).toEqual(["lab-operator", "lab-operator", "lab-operator"]);
+    expect(resolved.audit.map((event) => event.actor)).toEqual([
+      "Lab Operator (oidc:operator)", "Lab Operator (oidc:operator)", "Lab Operator (oidc:operator)"
+    ]);
     current.repository.close();
   });
 
@@ -193,7 +208,7 @@ describe("persistent incident operations", () => {
       reason: "Approved maintenance window",
       durationMinutes: 15
     });
-    expect(silenced.incident.silence).toMatchObject({ active: true, createdBy: "lab-operator" });
+    expect(silenced.incident.silence).toMatchObject({ active: true, createdBy: "Lab Operator" });
     current.setNow("2026-08-14T14:16:00.000Z");
 
     const readOnly = await current.service.getDetail(declared.incident.id);
@@ -378,7 +393,7 @@ describe("persistent incident operations", () => {
     }
 
     const declared = await current.service.transition(id, { action: "declare", expectedVersion: 1, reason: "Declare operator response" });
-    expect(declared.incident).toMatchObject({ declaredBy: "lab-operator", version: 2 });
+    expect(declared.incident).toMatchObject({ declaredBy: "Lab Operator", version: 2 });
     await expect(current.service.transition(id, { action: "declare", expectedVersion: 2, reason: "Duplicate declaration" }))
       .rejects.toMatchObject({ code: "invalid_incident_transition", status: 409 });
 
@@ -418,7 +433,7 @@ describe("persistent incident operations", () => {
     corrupt.repository.close();
 
     const invalidClockRepository = new SqliteIncidentRepository({
-      databasePath: databasePath(), catalog: catalogFixture, operatorId: "lab-operator", clock: () => new Date(Number.NaN)
+      databasePath: databasePath(), catalog: catalogFixture, clock: () => new Date(Number.NaN)
     });
     expect(() => invalidClockRepository.list("all", "all")).toThrow("Incident clock returned an invalid date");
     invalidClockRepository.close();

@@ -35,7 +35,7 @@
 | 4 | Infrastructure topology | Complete, deployed, and user-verified | Drill from an environment into workloads, nodes, and dependencies |
 | 5 | Alerts and incident operations | Complete, deployed, and user-verified | Persist, triage, acknowledge, silence, declare, and resolve alert-driven incidents |
 | 6 | Logs and event correlation | Complete, deployed, and user-verified | Move from a failed service to relevant logs and Kubernetes events |
-| 7 | Enterprise identity and access | Planned | Sign in through OIDC and verify role-scoped actions and audit records |
+| 7 | Enterprise identity and access | Implemented and tested locally; deployment and human acceptance pending | Sign in through OIDC and verify role-scoped actions and audit records |
 | 8 | Safe synthetic journeys | Planned | Run non-destructive CPQ/OAuth/Mailpit/ERPNet journeys and see step diagnostics |
 | 9 | Cloud-ready operations | Planned | Install, upgrade, back up, restore, and roll back in an isolated target |
 
@@ -285,7 +285,7 @@ Let operators understand how deployments map to clusters, namespaces, workloads,
 
 ### Status
 
-Complete, deployed, automatically verified, and human-tested in the lab on 2026-08-14. Human acceptance confirmed persistent operator incident creation, live source and identity disclosure, audit evidence, and stale-version conflict handling that rejected a conflicting silence without saving it. Notification delivery remains explicitly unconfigured. Until Sprint 7 adds OIDC and RBAC, mutations use one server-configured lab operator identity and reject browser-selected actor fields.
+Complete, deployed, automatically verified, and human-tested in the lab on 2026-08-14. Human acceptance confirmed persistent operator incident creation, live source and identity disclosure, audit evidence, and stale-version conflict handling that rejected a conflicting silence without saving it. Notification delivery remains explicitly unconfigured. The deployed Sprint 6 runtime still uses one server-configured lab operator identity; the locally tested Sprint 7 candidate replaces it with validated OIDC session identity and continues to reject browser-selected actor fields.
 
 ### Objective
 
@@ -396,26 +396,59 @@ Add bounded log search and correlate application, probe, and Kubernetes evidence
 
 ## Sprint 7: Enterprise identity and access
 
+### Status
+
+Implemented and tested locally on 2026-08-16. The direct OIDC lifecycle, persistent encrypted sessions, server-side roles, authenticated incident attribution, browser role awareness, authentication audit, reverse-proxy protection, and deployment guardrails are complete. No lab deployment or provider/Cloudflare change has occurred. Exact provider registration, claim/group mappings, runtime credentials, external callback-log review, deployment authorization, and human acceptance are pending.
+
 ### Objective
 
 Protect the console with OIDC and enforce least-privilege operator roles.
 
 ### Deliverables
 
-- OIDC login/logout through the selected enterprise provider.
-- Viewer, Operator, and Administrator roles.
-- Server-side authorization for every non-read-only action.
-- Session expiry, forbidden, provider-unavailable, and clock-skew states.
-- Audit log for authentication and operational changes.
+- Direct OIDC Authorization Code login, exact callback, refresh, expiry, local-first logout, state, nonce, and PKCE S256 validation.
+- Opaque `__Host-` cookies backed by AES-256-GCM encrypted persistent SQLite transactions and sessions.
+- Explicit Viewer, Operator, and Administrator group mappings with highest-matching-role precedence.
+- Server-side authorization for every incident mutation and the administrator-only authentication-audit API.
+- Same-origin mutation checks, safe return paths, session fixation/replay protection, bounded expiry, revocation, restart persistence, and current/previous key rotation.
+- Safe same-origin session identity plus browser read-only behavior for Viewers without treating UI hiding as authorization.
+- Authentication and authorization audit records with bounded, secret-free metadata; authenticated incident audit attribution for successful operations.
+- Nginx authentication enforcement for pages, assets, monitoring APIs, and proxied source tools while retaining public `/healthz` and authentication bootstrap routes.
+- Deployment preflight for mandatory HTTPS issuer, exact mappings, persistent storage, and separately mounted UID/GID `10001`, mode-`0400` client-secret and keyring files.
 
 ### Acceptance criteria
 
-- Anonymous users cannot access monitoring data unless an explicitly approved public status view exists.
-- UI hiding is never the only authorization control.
-- Viewer cannot acknowledge or silence alerts.
-- Operator cannot change identity, retention, or integration settings.
-- Role and tenant/environment boundaries have negative-path tests.
-- Authentication failures do not leak tokens or provider details.
+- Anonymous requests cannot access protected pages, assets, monitoring APIs, incident data, or proxied source tools.
+- Authenticated Viewers can read monitoring evidence but cannot declare, acknowledge, silence, or resolve incidents.
+- Operators can run only the existing approved incident commands; Administrators add only the authentication-audit read capability.
+- Every mutation derives actor ID, display name, and role from the validated server session; browser actor or role fields are rejected.
+- Expired, revoked, malformed, replayed, incorrectly signed, wrong-subject, wrong-issuer, retired-key, or role-less sessions fail closed.
+- OIDC state, nonce, PKCE, callback, and return-path validation reject tampering and open redirects.
+- Provider failure returns an explicit unavailable state and never falls back to the configured lab actor or grants access.
+- Authorization failures reveal no tokens, provider secrets, raw claims, callbacks, state, nonce, or protected evidence.
+- Authentication audit records actor, action, outcome, reason code, and bounded metadata; incident audit records the authenticated actor for successful mutations.
+- Server coverage remains at least 90%; automated deployment verification proves anonymous fail-closed behavior and human acceptance proves all three configured roles.
+
+### Failure modes to test
+
+- Missing, malformed, replayed, expired, or wrong-key transaction/session cookies.
+- Duplicate or missing callback state/code, provider denial, invalid nonce/PKCE/signature, issuer/subject mismatch, and clock skew outside the approved tolerance.
+- Discovery, token, UserInfo, refresh, and logout endpoints are unavailable, time out, reject the request, or return malformed data.
+- Refresh tokens are absent, rejected, rotated concurrently, or return a user whose subject, issuer, role, display claim, or expiry is invalid.
+- Session database or keyring is missing, corrupt, incorrectly owned, too permissive, restarted, rotated, or retired.
+- Return paths are absolute, scheme-relative, encoded, backslash-containing, fragmented, oversized, or outside the known route set.
+- Viewer and anonymous clients call every mutation directly; browser payloads add actor/role fields; origin/fetch-site headers are missing or cross-site.
+- Authentication and authorization errors attempt to place secrets, claims, provider details, or unbounded values in responses and audit records.
+
+### Deployment decisions still required
+
+- Select and approve the exact OIDC provider, HTTPS issuer, confidential client registration, client ID/secret custody, callback/logout URI registration, and required protocol capabilities.
+- Approve the exact scopes, display-name claim, group claim, and distinct Viewer/Operator/Administrator group values.
+- Approve key generation, transfer, current/previous rotation, retirement, emergency revocation, session-database backup, and restart procedures.
+- Review external Cloudflare/provider callback-query logging; Cloudflare headers remain untrusted and Cloudflare configuration remains outside this repository.
+- Identify human test users for all three roles and explicitly authorize deployment after the runtime files are provisioned.
+
+See [ADR 0007](adr/0007-enterprise-identity-access.md) for the complete architecture and failure contract.
 
 ## Sprint 8: Safe synthetic journeys
 

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import type { InventorySnapshot, ServiceInventory } from "../../shared/inventory";
+import type { SessionUser } from "../../shared/auth";
 import type {
   DeclareIncidentCommand,
   IncidentAlertSourceStatus,
@@ -53,7 +54,6 @@ export class IncidentRequestError extends Error {
 interface IncidentRepositoryOptions {
   readonly databasePath: string;
   readonly catalog: CatalogDefinition;
-  readonly operatorId: string;
   readonly clock?: () => Date;
 }
 
@@ -234,11 +234,9 @@ export class SqliteIncidentRepository {
   private readonly database: DatabaseSync;
   private readonly services: ReadonlyMap<string, CatalogServiceDefinition>;
   private readonly clock: () => Date;
-  readonly operatorId: string;
 
   constructor(options: IncidentRepositoryOptions) {
     this.clock = options.clock ?? (() => new Date());
-    this.operatorId = normalizedText(options.operatorId, "operatorId", 1, 100);
     this.services = new Map(options.catalog.services.map((service) => [service.id, service]));
     this.database = new DatabaseSync(options.databasePath);
     try {
@@ -515,20 +513,20 @@ export class SqliteIncidentRepository {
     return { incidents: rows.slice(0, MAX_INCIDENTS).map((row) => this.summary(row, now)), truncated: rows.length > MAX_INCIDENTS };
   }
 
-  detail(id: string): IncidentDetailResponse {
+  detail(id: string, operator: SessionUser): IncidentDetailResponse {
     const now = this.now();
     const internalId = internalIncidentId(id);
     return {
       apiVersion: 1,
       assembledAt: now,
       notification,
-      operator: { id: this.operatorId, identityMode: "configured-lab-operator" },
+      operator: { ...operator, identityMode: "authenticated-session" },
       incident: this.summary(this.incidentRow(internalId), now),
       audit: this.audit(internalId)
     };
   }
 
-  declare(command: DeclareIncidentCommand): IncidentDetailResponse {
+  declare(command: DeclareIncidentCommand, operator: SessionUser): IncidentDetailResponse {
     const serviceId = normalizedText(command.serviceId, "serviceId", 1, 64);
     const title = normalizedText(command.title, "title", 3, 160);
     const reason = normalizedText(command.reason, "reason", 3, 500);
@@ -542,17 +540,17 @@ export class SqliteIncidentRepository {
         started_at, last_observed_at, updated_at, resolved_at, acknowledged_at, acknowledged_by,
         declared_at, declared_by, assignee, owner, alert_active, recovered_at, runbook_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, 0, NULL, ?)`)
-        .run(`operator:${randomUUID()}`, title, `Operator-declared incident affecting ${service.displayName}.`, service.id, service.displayName, service.environment, command.severity, now, now, now, now, this.operatorId, this.operatorId, service.owner, JSON.stringify(runbook(service)));
+        .run(`operator:${randomUUID()}`, title, `Operator-declared incident affecting ${service.displayName}.`, service.id, service.displayName, service.environment, command.severity, now, now, now, now, operator.displayName, operator.displayName, service.owner, JSON.stringify(runbook(service)));
       const incidentId = integer(result.lastInsertRowid, "Incident id");
       this.database.prepare("INSERT INTO incident_evidence(incident_id, source, state, first_observed_at, last_observed_at, occurrences, message, active) VALUES (?, 'operator', 'operator', ?, ?, 1, ?, 1)")
         .run(incidentId, now, now, reason);
-      this.insertAudit(incidentId, "created", this.operatorId, reason, now, null, "active", 1);
+      this.insertAudit(incidentId, "created", `${operator.displayName} (${operator.id})`, reason, now, null, "active", 1);
       return incidentId;
     });
-    return this.detail(publicIncidentId(id));
+    return this.detail(publicIncidentId(id), operator);
   }
 
-  transition(id: string, command: IncidentTransitionCommand): IncidentDetailResponse {
+  transition(id: string, command: IncidentTransitionCommand, operator: SessionUser): IncidentDetailResponse {
     if (!transitionValues.has(command.action)) throw new IncidentRequestError("invalid_incident_command", 400, "Unsupported incident transition.");
     if (!Number.isSafeInteger(command.expectedVersion) || command.expectedVersion < 1) throw new IncidentRequestError("invalid_incident_command", 400, "expectedVersion must be a positive safe integer.");
     const reason = normalizedText(command.reason, "reason", 3, 500);
@@ -574,19 +572,19 @@ export class SqliteIncidentRepository {
       if (command.action === "acknowledge") {
         if (row.acknowledged_at !== null) throw new IncidentRequestError("invalid_incident_transition", 409, "The incident is already acknowledged.");
         this.database.prepare("UPDATE incidents SET acknowledged_at = ?, acknowledged_by = ?, assignee = ?, updated_at = ?, version = ? WHERE id = ?")
-          .run(now, this.operatorId, this.operatorId, now, version, internalId);
+          .run(now, operator.displayName, operator.displayName, now, version, internalId);
         action = "acknowledged";
       } else if (command.action === "declare") {
         if (row.declared_at !== null) throw new IncidentRequestError("invalid_incident_transition", 409, "The incident is already declared.");
         this.database.prepare("UPDATE incidents SET declared_at = ?, declared_by = ?, assignee = ?, updated_at = ?, version = ? WHERE id = ?")
-          .run(now, this.operatorId, this.operatorId, now, version, internalId);
+          .run(now, operator.displayName, operator.displayName, now, version, internalId);
         action = "declared";
       } else if (command.action === "silence") {
         const active = this.database.prepare("SELECT id FROM incident_silences WHERE incident_id = ? AND expired_at IS NULL AND expires_at > ? LIMIT 1").get(internalId, now);
         if (active !== undefined) throw new IncidentRequestError("invalid_incident_transition", 409, "The incident already has an active silence.");
         const expiresAt = new Date(Date.parse(now) + (command.durationMinutes ?? 0) * 60_000).toISOString();
         this.database.prepare("INSERT INTO incident_silences(incident_id, created_at, expires_at, created_by, reason, expired_at) VALUES (?, ?, ?, ?, ?, NULL)")
-          .run(internalId, now, expiresAt, this.operatorId, reason);
+          .run(internalId, now, expiresAt, operator.displayName, reason);
         this.database.prepare("UPDATE incidents SET updated_at = ?, version = ? WHERE id = ?").run(now, version, internalId);
         action = "silenced";
       } else {
@@ -595,9 +593,9 @@ export class SqliteIncidentRepository {
         action = "resolved";
         toStatus = "resolved";
       }
-      this.insertAudit(internalId, action, this.operatorId, reason, now, row.status, toStatus, version);
+      this.insertAudit(internalId, action, `${operator.displayName} (${operator.id})`, reason, now, row.status, toStatus, version);
     });
-    return this.detail(id);
+    return this.detail(id, operator);
   }
 }
 
@@ -629,7 +627,7 @@ export class IncidentOperationsService {
     }
   }
 
-  list(environment: string, statusFilter: string): Promise<IncidentListResponse> {
+  list(environment: string, statusFilter: string, operator: SessionUser): Promise<IncidentListResponse> {
     return Promise.resolve().then(() => {
       if (!environmentValues.has(environment)) throw new IncidentRequestError("invalid_environment", 400, `Unsupported environment: ${environment}`);
       if (!statusFilterValues.has(statusFilter as IncidentStatusFilter)) throw new IncidentRequestError("invalid_incident_filter", 400, `Unsupported incident status: ${statusFilter}`);
@@ -651,21 +649,21 @@ export class IncidentOperationsService {
         },
         alertSource: this.alertSource,
         notification,
-        operator: { id: this.repository.operatorId, identityMode: "configured-lab-operator" },
+        operator: { ...operator, identityMode: "authenticated-session" },
         incidents
       };
     });
   }
 
-  getDetail(id: string): Promise<IncidentDetailResponse> {
-    return Promise.resolve().then(() => this.repository.detail(id));
+  getDetail(id: string, operator: SessionUser): Promise<IncidentDetailResponse> {
+    return Promise.resolve().then(() => this.repository.detail(id, operator));
   }
 
-  declare(command: DeclareIncidentCommand): Promise<IncidentDetailResponse> {
-    return Promise.resolve().then(() => this.repository.declare(command));
+  declare(command: DeclareIncidentCommand, operator: SessionUser): Promise<IncidentDetailResponse> {
+    return Promise.resolve().then(() => this.repository.declare(command, operator));
   }
 
-  transition(id: string, command: IncidentTransitionCommand): Promise<IncidentDetailResponse> {
-    return Promise.resolve().then(() => this.repository.transition(id, command));
+  transition(id: string, command: IncidentTransitionCommand, operator: SessionUser): Promise<IncidentDetailResponse> {
+    return Promise.resolve().then(() => this.repository.transition(id, command, operator));
   }
 }

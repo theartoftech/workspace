@@ -2,7 +2,7 @@
 
 This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 6 are complete, deployed, and user-verified: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, read-only Kubernetes topology, persistent alert-driven incident operations, and bounded Kubernetes log and event correlation.
 
-Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 6 logs and event correlation completed deployment verification and human acceptance on 2026-08-15. Sprint 7 enterprise identity and access is the next planned increment.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 6 logs and event correlation completed deployment verification and human acceptance on 2026-08-15. Sprint 7 enterprise identity and access is implemented and tested locally; its provider registration, runtime credentials, deployment, and human role acceptance remain explicitly pending.
 
 ## Foundation scope
 
@@ -17,10 +17,11 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Internal reachability | CPQ demo/test, OAuth demo/test, Mailpit, and ERPNet from the CPQ server |
 | Public-path simulation | Public CPQ demo and ERPNet URLs, including TLS expiry, from the same CPQ server—not an independent external vantage |
 | Incident operations | Deployed persistent SQLite incidents, inventory-health alert evaluation, bounded silences, state transitions, runbooks, and audit history |
-| Log correlation | Locally implemented direct Kubernetes pod-log and event correlation with fixed windows, server-side redaction, partial-source disclosure, and diagnostic JSON export |
+| Log correlation | Deployed direct Kubernetes pod-log and event correlation with fixed windows, server-side redaction, partial-source disclosure, and diagnostic JSON export |
+| Identity and access | Locally implemented direct OIDC lifecycle, encrypted persistent sessions, Viewer/Operator/Administrator enforcement, same-origin mutation protection, and bounded authentication audit |
 | Alert delivery | Explicitly unconfigured until notification destinations and credential handling are selected |
 
-Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Sprint 6 adds direct, ephemeral Kubernetes pod logs rather than a durable aggregated log store. Settings remains a preview. Per-user OIDC identity, notification delivery, durable log aggregation/retention, safe transaction journeys, and additional application scrapes remain later-sprint work.
+Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Sprint 6 adds direct, ephemeral Kubernetes pod logs rather than a durable aggregated log store. The Sprint 7 candidate protects application pages, APIs, and proxied tools with direct OIDC and derives every incident actor from a validated role-scoped session. Settings remains a preview. Notification delivery, durable log aggregation/retention, safe transaction journeys, and additional application scrapes remain later-sprint work.
 
 ## Repository layout
 
@@ -38,6 +39,8 @@ Overview, deployments, service detail, infrastructure topology, and incident eva
 - `documentation/adr/0004-kubernetes-topology-architecture.md` — bounded topology API, issue taxonomy, UI scaling, and RBAC decision.
 - `documentation/adr/0005-persistent-incident-operations.md` — incident persistence, evaluation, mutation, identity, and notification boundaries.
 - `documentation/adr/0006-kubernetes-log-correlation.md` — selected lab log source, query bounds, redaction, partial-failure, export, and RBAC boundaries.
+- `documentation/adr/0007-enterprise-identity-access.md` — direct OIDC, encrypted sessions, role enforcement, failure behavior, and provider decision gates.
+- `documentation/sprint-7-human-test-script.md` — pending public-origin Viewer/Operator/Administrator acceptance and privacy-safe evidence record.
 - `deployment/ENVIRONMENTS.md` — target topology, secret preparation, and operator workflow.
 - `probes/internal` — Gatus node intended to run inside the lab network.
 - `probes/external` — Gatus node intended to run on an independent public host.
@@ -45,32 +48,12 @@ Overview, deployments, service detail, infrastructure topology, and incident eva
 - `web/src` — enterprise shell, live and fixture providers, service detail, reusable components, and UI tests.
 - `documentation/adr` — architecture decisions for review before later live-data integration.
 
-## Run the current workspace locally
+## Run and verify the current workspace locally
 
-Build and run the read-only API against the already deployed lab Gatus endpoints:
+Install dependencies and run the deterministic application and server quality gates:
 
 ```sh
 npm install
-npm run build:server
-GATUS_INTERNAL_API_URL=http://192.168.86.246:8085/api/v1/endpoints/statuses \
-GATUS_PUBLIC_PATH_API_URL=http://192.168.86.246:8186/api/v1/endpoints/statuses \
-PROMETHEUS_API_URL=http://192.168.86.246:9090 \
-INCIDENT_DATABASE_PATH=/tmp/workspace-monitor-incidents.sqlite \
-INCIDENT_OPERATOR_ID=local-operator \
-  node dist-server/server/src/main.js
-```
-
-In another console, start the portal:
-
-```sh
-npm run dev
-```
-
-Vite proxies `/api` to the local API on port `3001`; the deployed Compose profile provides the equivalent same-origin proxy. Open `/performance` for bounded metrics or `/logs` for catalog-scoped Kubernetes logs and events across the same 15-minute through 24-hour ranges. The persistent data banner distinguishes live, partial, and test-fixture states. Navigate with the left rail or press `/` to open command search.
-
-Run the complete frontend quality gate with:
-
-```sh
 npm test
 npm run test:server:coverage
 npm run test:coverage
@@ -78,9 +61,12 @@ npm run test:a11y
 npm run typecheck
 npm run lint
 npm run build
+npm run build:server
 ```
 
-The live route set includes Overview, Deployments, Infrastructure, Performance, Incidents, Logs, and `/services/<catalog-id>`. Settings remains a preview. Monitoring evidence routes accept only GET/HEAD. The incident surface adds strict, bounded POST commands for declarations and state transitions; it never accepts a browser-selected actor. Topology and log evidence are server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives infrastructure credentials, arbitrary Kubernetes paths, or arbitrary PromQL access.
+The live server intentionally refuses startup without an approved HTTPS public origin, OIDC issuer/client and exact claim/group mappings, persistent incident and authentication databases, and separately provisioned client-secret and session-keyring files. Use [the environment runbook](deployment/ENVIRONMENTS.md) rather than placing credentials in shell history. The browser never falls back to fixtures when live authentication or evidence fails.
+
+The live route set includes Overview, Deployments, Infrastructure, Performance, Incidents, Logs, and `/services/<catalog-id>`. Settings remains a preview. Monitoring evidence routes accept only GET/HEAD. The incident surface adds strict, bounded POST commands for declarations and state transitions; it never accepts a browser-selected actor or role. Viewers are read-only, Operators can run approved incident commands, and Administrators additionally receive the bounded authentication-audit API. Topology and log evidence are server-capped and catalog-namespace bounded, performance queries are selected from server-owned templates, and the browser never receives OIDC tokens, provider claims, infrastructure credentials, arbitrary Kubernetes paths, or arbitrary PromQL access.
 
 ## Verification criteria
 

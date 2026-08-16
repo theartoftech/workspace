@@ -18,8 +18,9 @@ The primary upskilling deployment is one Docker Compose stack on the same Ubuntu
 - Remote Kubernetes synchronization contains only the deployment script and Helm chart.
 - Remote Gatus synchronization contains only its script, Compose/config files, and non-secret example environment file.
 - Runtime `.env` files and SQLite databases are never transferred from the workstation or committed to Git.
-- Incident SQLite data stays under the host runtime data directory and is excluded from deployment archives.
-- Kubernetes bearer tokens are read only from a host-mounted runtime file; they are never placed in Compose environment variables or synchronized archives.
+- Incident and authentication SQLite data stay under the host runtime data directory and are excluded from deployment archives.
+- Kubernetes bearer tokens, the OIDC client secret, and authentication session keys are read only from individually mounted host runtime files; they are never placed in Compose environment variables or synchronized archives.
+- Cloudflare Access remains an outer perimeter. Its identity headers are not trusted as Workspace Monitor identity, and repository scripts never modify Cloudflare, DNS, tunnels, or provider configuration.
 
 ## Primary single-host lab profile
 
@@ -66,7 +67,58 @@ MONITORING_ENV_FILE=/home/jhaynes/workspace-monitor/runtime/lab-docker/.env
 
 Set `MONITORING_UID` and `MONITORING_GID` from `id -u` and `id -g`. Create the Grafana password file with a password-manager-generated value, owned by that UID/GID, and mode `0640`. Grafana remains UID 472 and receives the monitoring host group as a supplementary group solely to read this file. Sprint 0 does not require SMTP or webhook credentials; notification delivery is deferred until the integration design is reviewed.
 
-The deploy action creates `${MONITORING_DATA_DIR}/incidents` with group-write access for the unprivileged API container and stores `incidents.sqlite` there. Plan, preflight, status, verify, and logs do not create or modify that directory. Container replacement must preserve it. The database contains operational history rather than infrastructure credentials, but it can contain operator-entered reasons and must not be copied into deployment archives, logs, screenshots, or Git. Notification credentials are not configured or accepted by Sprint 5.
+The deploy action creates `${MONITORING_DATA_DIR}/incidents` with group-write access for the unprivileged API container and stores `incidents.sqlite` and `auth.sqlite` there. Plan, preflight, status, verify, and logs do not create or modify that directory. Container replacement must preserve it. The incident database contains operational history and operator-entered reasons. The authentication database contains encrypted session payloads, opaque identifier hashes, and bounded audit history. Neither database may be copied into deployment archives, logs, screenshots, or Git. Notification credentials are not configured or accepted.
+
+### Required enterprise identity decisions and runtime files
+
+Sprint 7 is implemented locally but must not be deployed from placeholder settings. Before preflight, explicitly approve and register a confidential direct-OIDC client with all of these capabilities:
+
+- exact redirect URI `https://monitor.jefferyhaynes.net/auth/callback`;
+- post-logout return URI `https://monitor.jefferyhaynes.net/` when provider logout is supported;
+- Authorization Code flow, PKCE S256, `client_secret_basic`, ID token validation, UserInfo, and refresh-token issuance;
+- an approved scope set containing `openid`;
+- one approved display-name claim and one group-valued role claim;
+- three distinct exact group values for Viewer, Operator, and Administrator.
+
+Set the approved non-secret values in the remote runtime `.env`:
+
+```dotenv
+MONITORING_PUBLIC_URL=https://monitor.jefferyhaynes.net
+OIDC_ISSUER_URL=https://<approved-provider>/<approved-issuer-path>
+OIDC_CLIENT_ID=<approved-confidential-client-id>
+OIDC_SCOPES=<approved-openid-including-scope-set>
+OIDC_DISPLAY_NAME_CLAIM=<approved-claim-path>
+OIDC_ROLE_CLAIM=<approved-group-claim-path>
+OIDC_VIEWER_GROUP=<exact-viewer-group>
+OIDC_OPERATOR_GROUP=<exact-operator-group>
+OIDC_ADMINISTRATOR_GROUP=<exact-administrator-group>
+```
+
+Do not copy the placeholder issuer or mappings from `.env.example` into a deployment. Do not add the client secret or session key to `.env`. Install them through the approved secret-transfer workflow at these exact paths:
+
+- `/home/jhaynes/workspace-monitor/runtime/lab-docker/data/runtime-secrets/oidc_client_secret`
+- `/home/jhaynes/workspace-monitor/runtime/lab-docker/data/runtime-secrets/auth_session_keyring`
+
+Both files must be regular files owned by UID/GID `10001` with exact mode `0400`. The client-secret file contains only the provider-issued value. The keyring file has this strict schema, with a unique safe key ID and a password-manager or CSPRNG-generated 32-byte secret encoded as unpadded base64url:
+
+```json
+{
+  "version": 1,
+  "activeKeyId": "<current-key-id>",
+  "keys": [
+    {
+      "id": "<current-key-id>",
+      "secret": "<43-character-base64url-encoded-32-byte-secret>"
+    }
+  ]
+}
+```
+
+Never print either file, pass its value on a command line, store it in shell history, or include it in a support artifact. Preflight checks only existence, exact ownership/mode, non-emptiness, and keyring version; application startup performs strict parsing without echoing the value.
+
+For controlled key rotation, add one new key, set it active, retain only the immediately previous key, and replace the file atomically before restarting `inventory-api`. Existing sessions using the previous key survive. After the 12-hour absolute session bound (plus the 10-minute transaction bound), remove the previous key and restart; any remaining record tied to it fails closed. Removing a key immediately is the emergency session-revocation mechanism. Separately rotate or revoke the OIDC client secret through the provider and secure runtime workflow. Back up `auth.sqlite` only through an approved encrypted operational process and always together with the applicable keyring revision.
+
+The OIDC callback uses a query string. Local Nginx callback access logging is disabled, but Cloudflare and provider logging are externally managed. Review their query-string handling before deployment. Do not treat Cloudflare Access headers as a substitute for this validated OIDC session.
 
 ### Required live Kubernetes evidence
 
@@ -104,7 +156,7 @@ Deploy the portfolio repository before this monitoring release. Its Kubernetes m
 
 Prometheus resolves that private Service through k3s CoreDNS. `KUBERNETES_CLUSTER_DNS` defaults to the standard k3s address `10.43.0.10`; set it explicitly in the runtime `.env` if the cluster uses another service CIDR. The monitoring `verify` command refuses acceptance unless the portfolio `request-total` series is present.
 
-Then run the read-only preflight:
+After the Kubernetes and identity prerequisites are provisioned, run the read-only preflight:
 
 ```sh
 ./deployment/scripts/deploy-lab-docker.sh preflight \
@@ -139,13 +191,13 @@ Before Sprint 1.1 cutover, the user-managed tunnel continues to route `monitor.j
 The implemented deployment and operator-controlled cutover sequence is intentionally reversible:
 
 1. Deploy the portal and inventory API containers without changing Cloudflare.
-2. Verify `/healthz`, `/api/v1/inventory`, `/api/v1/incidents`, `/api/v1/logs`, all primary routes, source/redaction disclosure, resource limits, and existing Grafana/monitoring health over loopback.
+2. Verify public `/healthz`, anonymous redirects for all primary pages, anonymous `401` responses for monitoring/incident/log/source APIs, an OIDC login redirect, resource limits, and existing Grafana/monitoring health over loopback.
 3. Confirm that the Cloudflare Access policy is active for `monitor.jefferyhaynes.net`.
 4. Change the user-managed tunnel origin from `http://localhost:3000` to `http://localhost:3100`.
-5. Verify public TLS, Access enforcement, and portal navigation.
+5. Through the public TLS origin, complete human acceptance with dedicated Viewer, Operator, and Administrator identities: prove Viewer read-only behavior, Operator incident commands and attribution, Administrator audit access, safe logout/return paths, expiry behavior, and source/redaction disclosure.
 6. If verification fails, restore the tunnel origin to `http://localhost:3000`; this tunnel rollback is independent of container rollback.
 
-The repository script automates steps 1 and 2 only. Steps 3–6 remain explicit operator actions. See [PORTAL_ROLLBACK.md](PORTAL_ROLLBACK.md) for the exact image/API and tunnel rollback procedures. Live inventory always identifies partial and unavailable sources; preview-only routes retain their fixture disclosure.
+The repository script automates steps 1 and 2 only. It cannot create an authenticated browser session or bypass OIDC for verification. Steps 3–6 remain explicit operator actions. Deployment is not authorized until the provider/mapping/key-custody decisions above are approved and the runtime files are provisioned. See [PORTAL_ROLLBACK.md](PORTAL_ROLLBACK.md) for the exact image/API and tunnel rollback procedures. Live inventory always identifies partial and unavailable sources; preview-only routes retain their fixture disclosure.
 
 The public-path Gatus process runs on the same host. It validates DNS, TLS, reverse-proxy, and public URL behavior, but it cannot detect loss of the server, LAN, ISP, host Docker daemon, or host power independently.
 

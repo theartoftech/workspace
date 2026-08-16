@@ -1,8 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createFixtureMonitoringProvider, createLiveMonitoringProvider } from "./provider";
+import { MonitoringRequestError, createFixtureMonitoringProvider, createLiveMonitoringProvider } from "./provider";
 
 describe("fixture monitoring provider", () => {
+  it("exposes only safe authenticated session identity and typed authentication failures", async () => {
+    const fixture = await createFixtureMonitoringProvider().getSession();
+    expect(fixture).toMatchObject({ authenticated: true, user: { displayName: "J. Haynes", role: "administrator" } });
+    expect(JSON.stringify(fixture)).not.toMatch(/issuer|subject|groups|refresh|access_token/iu);
+
+    const live = createLiveMonitoringProvider({
+      fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+        apiVersion: 1,
+        authenticated: true,
+        user: { id: "oidc:user", displayName: "Operator", role: "operator" },
+        expiresAt: "2026-08-17T00:00:00.000Z",
+        idleExpiresAt: "2026-08-16T13:00:00.000Z"
+      }), { status: 200 })),
+      timeoutMs: 1000
+    });
+    await expect(live.getSession()).resolves.toMatchObject({ user: { id: "oidc:user", role: "operator" } });
+
+    const anonymous = createLiveMonitoringProvider({
+      fetchImpl: () => Promise.resolve(new Response(JSON.stringify({ error: { code: "authentication_required", message: "Authentication is required." } }), { status: 401 })),
+      timeoutMs: 1000
+    });
+    await expect(anonymous.getSession()).rejects.toMatchObject({ status: 401, code: "authentication_required" });
+    await expect(anonymous.getSession()).rejects.toBeInstanceOf(MonitoringRequestError);
+  });
+
   it("returns an explicitly labeled fixture snapshot", async () => {
     const provider = createFixtureMonitoringProvider();
     const snapshot = await provider.getOverview("all", "1h");
@@ -189,7 +214,7 @@ describe("fixture monitoring provider", () => {
       summary: { total: 1, active: 1, resolved: 0, unacknowledged: 1, silenced: 0 },
       alertSource: { name: "inventory-health-evaluator", availability: "available", evaluatedAt: "2026-08-14T14:00:00Z", message: null },
       notification: { state: "unconfigured", message: "No destination configured." },
-      operator: { id: "lab-operator", identityMode: "configured-lab-operator" }, incidents: [incident]
+      operator: { id: "oidc:lab-operator", displayName: "Lab Operator", role: "operator", identityMode: "authenticated-session" }, incidents: [incident]
     } as const;
     const detail = { apiVersion: 1, assembledAt: list.assembledAt, notification: list.notification, operator: list.operator, incident, audit: [] } as const;
     const fetchImpl = vi.fn()

@@ -1,4 +1,5 @@
 import type { HealthState, InventoryEnvironment } from "./inventory";
+import type { SessionUser } from "./auth";
 
 export type IncidentEnvironment = Exclude<InventoryEnvironment, "all">;
 export type IncidentSeverity = "P1" | "P2" | "P3";
@@ -79,9 +80,8 @@ export interface IncidentAuditEvent {
   readonly version: number;
 }
 
-export interface IncidentOperator {
-  readonly id: string;
-  readonly identityMode: "configured-lab-operator";
+export interface IncidentOperator extends SessionUser {
+  readonly identityMode: "authenticated-session";
 }
 
 export interface IncidentNotificationStatus {

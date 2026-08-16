@@ -14,14 +14,17 @@ FROM node:24.16.0-alpine3.24@sha256:21f403ab171f2dc89bad4dd69d7721bfd15f084ccb46
 
 ARG PORTAL_BUILD_REVISION=development
 
-LABEL org.opencontainers.image.title="Workspace Monitor Inventory API" \
-      org.opencontainers.image.description="Read-only live deployment inventory aggregator" \
+LABEL org.opencontainers.image.title="Workspace Monitor Operations API" \
+      org.opencontainers.image.description="Same-origin monitoring, identity, and incident operations API" \
       org.opencontainers.image.revision="${PORTAL_BUILD_REVISION}"
 
 RUN addgroup -S -g 10001 inventory && adduser -S -D -H -u 10001 -G inventory inventory
 
 WORKDIR /app
 ENV NODE_ENV=production
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
 
 COPY --from=build /workspace/dist-server/server/src ./server/src
 COPY --from=build /workspace/dist-server/server/package.json ./server/package.json

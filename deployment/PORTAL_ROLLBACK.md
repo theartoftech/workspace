@@ -1,6 +1,6 @@
 # Portal and operations API deployment and rollback runbook
 
-This runbook covers the lab portal and matching operations API. Monitoring evidence routes, including Sprint 6 log correlation, remain read-only; Sprint 5 adds bounded incident command routes. The runbook does not delete containers, images, volumes, incident history, monitoring data, or credentials. Cloudflare tunnel and Access changes remain user-managed and are never performed by repository scripts.
+This runbook covers the lab portal and matching operations API. Monitoring evidence routes, including Sprint 6 log correlation, remain read-only; incident commands are bounded and Sprint 7 authorizes them from validated OIDC sessions. The runbook does not delete containers, images, volumes, incident/authentication history, monitoring data, or credentials. Cloudflare tunnel, Access, DNS, and identity-provider changes remain user-managed and are never performed by repository scripts.
 
 ## Record before deployment
 
@@ -35,14 +35,14 @@ Do not change Cloudflare until all checks pass:
 ./deployment/scripts/deploy-lab-docker.sh verify \
   --host 192.168.86.246 --ssh-user jhaynes
 ssh jhaynes@192.168.86.246 \
-  'curl -fsS http://127.0.0.1:3100/healthz && curl -fsS "http://127.0.0.1:3100/api/v1/inventory?environment=all" && curl -fsS "http://127.0.0.1:3100/api/v1/incidents?environment=all&status=active" && curl -fsS http://127.0.0.1:3000/api/health'
+  'curl -fsS http://127.0.0.1:3100/healthz && curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3100/ && curl -sS -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:3100/api/v1/inventory?environment=all" && curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3100/auth/login && curl -fsS http://127.0.0.1:3000/api/health'
 ```
 
-Health must return `healthy`; inventory and incidents must return versioned JSON envelopes; Grafana health must remain available. Review the portal at `http://localhost:3100` through an SSH tunnel before changing the public origin.
+Health must return `healthy`; the anonymous page, inventory API, and login start must return `302`, `401`, and `302` respectively; Grafana health must remain available. Repeat the protected-API check for incidents, logs, topology, performance, and both proxied Gatus routes. The repository verifier performs these checks but cannot bypass OIDC or manufacture a test session. Before public acceptance, review the exact provider registration, role mappings, secret ownership, session-key rotation plan, and external callback-query logging behavior.
 
 ## Cloudflare cutover
 
-Confirm that Cloudflare Access protects `monitor.jefferyhaynes.net`, then change its tunnel origin from `http://localhost:3000` to `http://localhost:3100`. Verify TLS, Access enforcement, live/partial source disclosure, the inventory API, and every primary portal route.
+Confirm that Cloudflare Access protects `monitor.jefferyhaynes.net`, then change its tunnel origin from `http://localhost:3000` to `http://localhost:3100`. Through the public TLS origin, verify Access enforcement, OIDC login/callback/logout, live/partial source disclosure, every primary route, and the role matrix with dedicated Viewer, Operator, and Administrator identities. Confirm that incident audit attribution uses the authenticated identity and that authentication failures disclose no protected evidence. Cloudflare Access remains an outer boundary; do not configure Workspace Monitor to trust its identity headers.
 
 ## Container rollback
 
@@ -77,7 +77,7 @@ MONITORING_ENV_FILE=/home/jhaynes/workspace-monitor/runtime/lab-docker/.env \
   up -d --no-deps --no-build inventory-api portal
 ```
 
-Re-run `/healthz`, `/api/v1/inventory`, `/api/v1/incidents` when supported by the selected revision, and all primary-route checks. The monitoring services, their volumes, and `${MONITORING_DATA_DIR}/incidents` are not recreated or removed by this command. A pre-Sprint-5 API will not read the incident database, but rollback must preserve it for a later compatible revision. If the prior revision predates Sprint 2 and has no inventory API image, restore that fixture portal alone and verify its global fixture disclosure before cutover.
+Re-run `/healthz`, anonymous fail-closed checks, OIDC login start when supported by the selected revision, and all primary-route checks. The monitoring services, their volumes, and `${MONITORING_DATA_DIR}/incidents` are not recreated or removed by this command. Preserve both `incidents.sqlite` and `auth.sqlite`, plus the separately managed keyring and client-secret files, even when the selected revision does not read them. A pre-Sprint-7 API does not enforce application OIDC/RBAC, so Cloudflare Access must remain active and the operator must understand that incident actions again use that revision's configured lab actor. A pre-Sprint-5 API will not read the incident database, but rollback must preserve it for a later compatible revision. If the prior revision predates Sprint 2 and has no inventory API image, restore that fixture portal alone and verify its global fixture disclosure before cutover.
 
 After the prior portal has passed verification, record the restored revision:
 
