@@ -369,6 +369,12 @@ describe("read-only inventory API", () => {
       });
       expect(declaration.status).toBe(201);
 
+      const logout = await fetch(`${base}/auth/logout`, {
+        method: "POST",
+        headers: { Origin: workspaceAuthentication.publicOrigin, "X-Workspace-CSRF": "logout" }
+      });
+      expect(logout.status).toBe(204);
+
       const oversized = await fetch(`${base}/api/v1/incidents`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Origin: workspaceAuthentication.publicOrigin, "Sec-Fetch-Site": "same-origin" },

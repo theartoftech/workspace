@@ -3,6 +3,31 @@ import { describe, expect, it, vi } from "vitest";
 import { MonitoringRequestError, createFixtureMonitoringProvider, createLiveMonitoringProvider } from "./provider";
 
 describe("fixture monitoring provider", () => {
+  it("posts logout with an explicit same-origin CSRF signal and requires a no-content acknowledgement", async () => {
+    const fetchImpl = vi.fn((): Promise<Response> => Promise.resolve(new Response(null, { status: 204 })));
+    const provider = createLiveMonitoringProvider({ fetchImpl, timeoutMs: 1000 });
+
+    await expect(provider.logout()).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledWith("/auth/logout", expect.objectContaining({
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "X-Workspace-CSRF": "logout" }
+    }));
+    await expect(createFixtureMonitoringProvider().logout()).resolves.toBeUndefined();
+
+    const rejected = createLiveMonitoringProvider({
+      fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ error: { code: "csrf_rejected", message: "Logout was rejected." } }), { status: 403 })),
+      timeoutMs: 1000
+    });
+    await expect(rejected.logout()).rejects.toMatchObject({ status: 403, code: "csrf_rejected" });
+
+    const malformedSuccess = createLiveMonitoringProvider({
+      fetchImpl: (): Promise<Response> => Promise.resolve(new Response("unexpected", { status: 200 })),
+      timeoutMs: 1000
+    });
+    await expect(malformedSuccess.logout()).rejects.toThrow("Logout API returned HTTP 200 instead of HTTP 204");
+  });
+
   it("exposes only safe authenticated session identity and typed authentication failures", async () => {
     const fixture = await createFixtureMonitoringProvider().getSession();
     expect(fixture).toMatchObject({ authenticated: true, user: { displayName: "J. Haynes", role: "administrator" } });

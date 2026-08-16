@@ -469,6 +469,7 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
     };
   }
   return {
+    logout(): Promise<void> { return Promise.resolve(); },
     getSession(): Promise<SessionResponse> { return Promise.resolve(fixtureSession); },
     getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot> {
       return Promise.resolve().then(() => {
@@ -568,7 +569,7 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 5000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000) throw new Error("Live provider timeoutMs must be 100..30000");
-  async function fetchJson(path: string, label: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<unknown> {
+  async function fetchResponse(path: string, label: string, method: "GET" | "POST" = "GET", body?: unknown, extraHeaders: Readonly<Record<string, string>> = {}): Promise<Response> {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
@@ -576,7 +577,7 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
       response = await fetchImpl(path, {
         method,
         credentials: "same-origin",
-        headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
+        headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...extraHeaders },
         signal: controller.signal,
         ...(body === undefined ? {} : { body: JSON.stringify(body) })
       });
@@ -597,6 +598,10 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
       } catch { /* retain the explicit HTTP error */ }
       throw new MonitoringRequestError(response.status, code, message);
     }
+    return response;
+  }
+  async function fetchJson(path: string, label: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<unknown> {
+    const response = await fetchResponse(path, label, method, body);
     try {
       return await response.json() as unknown;
     } catch {
@@ -604,6 +609,10 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
     }
   }
   return {
+    async logout(): Promise<void> {
+      const response = await fetchResponse("/auth/logout", "Logout API", "POST", undefined, { "X-Workspace-CSRF": "logout" });
+      if (response.status !== 204) throw new Error(`Logout API returned HTTP ${response.status} instead of HTTP 204`);
+    },
     async getSession(): Promise<SessionResponse> {
       return parseSession(await fetchJson("/api/v1/session", "Session API"));
     },

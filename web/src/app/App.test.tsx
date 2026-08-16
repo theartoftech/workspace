@@ -357,13 +357,37 @@ describe("enterprise application shell", () => {
     expect(screen.getByRole("combobox", { name: "Affected service" })).toHaveValue("portfolio");
   });
 
-  it("uses the local session logout endpoint", async () => {
+  it("completes the local logout command before navigating to Cloudflare logout", async () => {
     const user = userEvent.setup();
-    renderApp();
+    const logout = vi.fn(() => Promise.resolve());
+    const redirect = vi.fn<(path: string) => void>();
+    const provider: MonitoringProvider = { ...fixtureProvider, logout };
+    render(
+      <MemoryRouter>
+        <App provider={provider} logoutRedirect={redirect} />
+      </MemoryRouter>
+    );
     await screen.findByRole("heading", { name: "Fleet overview" });
     await user.click(screen.getByRole("button", { name: "Open operator menu" }));
-    expect(screen.getByRole("button", { name: "Sign out" }).closest("form")).toHaveAttribute("action", "/auth/logout");
-    expect(screen.getByRole("button", { name: "Sign out" }).closest("form")).toHaveAttribute("method", "post");
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(logout).toHaveBeenCalledOnce());
+    expect(redirect).toHaveBeenCalledWith("/cdn-cgi/access/logout");
+  });
+
+  it("reports a rejected logout without navigating away", async () => {
+    const user = userEvent.setup();
+    const redirect = vi.fn<(path: string) => void>();
+    const provider: MonitoringProvider = { ...fixtureProvider, logout: () => Promise.reject(new Error("Logout was rejected.")) };
+    render(
+      <MemoryRouter>
+        <App provider={provider} logoutRedirect={redirect} />
+      </MemoryRouter>
+    );
+    await screen.findByRole("heading", { name: "Fleet overview" });
+    await user.click(screen.getByRole("button", { name: "Open operator menu" }));
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Logout was rejected.");
+    expect(redirect).not.toHaveBeenCalled();
   });
 
   it("explains degraded state when workload evidence is unavailable", async () => {

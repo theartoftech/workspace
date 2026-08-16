@@ -150,18 +150,26 @@ describe("server-side authentication and authorization boundary", () => {
     expect((await request("/api/v1/auth/audit?limit=101", authentication)).status).toBe(400);
   });
 
-  it("starts Cloudflare logout only for an authenticated same-origin request", async () => {
+  it("acknowledges logout only for an authenticated same-origin request with the application CSRF header", async () => {
     const authentication = new FakeAuthentication();
     const logout = await request("/auth/logout", authentication, {
       method: "POST",
-      headers: { Origin: authentication.publicOrigin, "Sec-Fetch-Site": "same-origin" }
+      headers: { Origin: authentication.publicOrigin, "X-Workspace-CSRF": "logout" }
     });
-    expect(logout.status).toBe(303);
-    expect(logout.headers.get("location")).toBe("/cdn-cgi/access/logout");
+    expect(logout.status).toBe(204);
+    expect(logout.headers.get("location")).toBeNull();
     expect(logout.headers.get("set-cookie")).toBeNull();
 
     expect((await request("/auth/logout", authentication)).status).toBe(405);
     expect((await request("/auth/logout", authentication, { method: "POST" })).status).toBe(403);
+    expect((await request("/auth/logout", authentication, {
+      method: "POST",
+      headers: { Origin: "https://attacker.example", "X-Workspace-CSRF": "logout" }
+    })).status).toBe(403);
+    expect((await request("/auth/logout", authentication, {
+      method: "POST",
+      headers: { Origin: authentication.publicOrigin, "X-Workspace-CSRF": "wrong" }
+    })).status).toBe(403);
     expect(authentication.denied.at(-1)).toEqual({ user: users.operator, action: "auth.logout", reason: "csrf_rejected" });
   });
 

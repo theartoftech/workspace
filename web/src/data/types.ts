@@ -43,6 +43,7 @@ export interface OverviewSnapshot {
 }
 
 export interface MonitoringProvider {
+  logout(): Promise<void>;
   getSession(): Promise<SessionResponse>;
   getOverview(environment: EnvironmentId, timeRange: TimeRange): Promise<OverviewSnapshot>;
   getPerformance(environment: EnvironmentId, serviceId: string, timeRange: TimeRange): Promise<PerformanceSnapshot>;

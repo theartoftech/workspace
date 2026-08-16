@@ -90,11 +90,6 @@ function jsonResponse(status: number, body: unknown, headOnly: boolean, extraHea
   return new Response(headOnly ? null : serialized, { status, headers });
 }
 
-function redirectResponse(status: 303, location: string): Response {
-  const headers = responseHeaders({ Location: location, "Content-Length": "0" });
-  return new Response(null, { status, headers });
-}
-
 function errorBody(code: string, message: string): ApiErrorBody {
   return { error: { code, message } };
 }
@@ -316,6 +311,10 @@ function mutationOriginIsValid(request: Request, authentication: WorkspaceAuthen
   return request.headers.get("origin") === authentication.publicOrigin && request.headers.get("sec-fetch-site") === "same-origin";
 }
 
+function logoutRequestIsValid(request: Request, authentication: WorkspaceAuthentication): boolean {
+  return request.headers.get("origin") === authentication.publicOrigin && request.headers.get("x-workspace-csrf") === "logout";
+}
+
 function authError(cause: unknown, headOnly: boolean): Response {
   if (cause instanceof AuthenticationError) return jsonResponse(cause.status, errorBody(cause.code, cause.message), headOnly);
   return jsonResponse(503, errorBody("authentication_unavailable", "Authentication could not be completed."), headOnly);
@@ -345,12 +344,13 @@ export async function handleWorkspaceRequest(
 
   if (logoutRoute) {
     if (request.method !== "POST") return jsonResponse(405, errorBody("method_not_allowed", "Only POST is supported for logout."), false, { Allow: "POST" });
-    if (!mutationOriginIsValid(request, authentication)) {
+    if (!logoutRequestIsValid(request, authentication)) {
       authentication.recordAuthorizationDenied(session.user, "auth.logout", "csrf_rejected");
       return jsonResponse(403, errorBody("csrf_rejected", "The request origin is not allowed."), false);
     }
     try {
-      return redirectResponse(303, authentication.recordLogout(session.user).redirectTo);
+      authentication.recordLogout(session.user);
+      return new Response(null, { status: 204, headers: responseHeaders({ "Content-Length": "0" }) });
     } catch (cause: unknown) {
       return authError(cause, false);
     }
@@ -420,7 +420,7 @@ export function createInventoryHttpServer(authentication: WorkspaceAuthenticatio
       const method = safeNodeRequestMethod(incoming.method);
       const body = Buffer.concat(chunks);
       const headers = new Headers();
-      for (const name of ["accept", "content-type", "cf-access-jwt-assertion", "origin", "sec-fetch-site"] as const) {
+      for (const name of ["accept", "content-type", "cf-access-jwt-assertion", "origin", "sec-fetch-site", "x-workspace-csrf"] as const) {
         const value = incoming.headers[name];
         if (typeof value === "string") headers.set(name, value);
       }

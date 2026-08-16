@@ -173,7 +173,16 @@ function userInitials(displayName: string): string {
   return initials === "" ? "?" : initials;
 }
 
-export function App({ provider = liveProvider }: { readonly provider?: MonitoringProvider }): React.JSX.Element {
+function redirectToCloudflareLogout(path: string): void {
+  window.location.assign(path);
+}
+
+interface AppProps {
+  readonly provider?: MonitoringProvider;
+  readonly logoutRedirect?: (path: string) => void;
+}
+
+export function App({ provider = liveProvider, logoutRedirect = redirectToCloudflareLogout }: AppProps): React.JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const [environment, setEnvironment] = useState<EnvironmentId>("all");
@@ -190,6 +199,8 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
   const [commandOpen, setCommandOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [operatorOpen, setOperatorOpen] = useState(false);
+  const [logoutPending, setLogoutPending] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [incidentRefreshKey, setIncidentRefreshKey] = useState(0);
@@ -278,6 +289,19 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
   }, [location.pathname]);
 
   const routeSnapshot = useMemo<OverviewSnapshot | null>(() => snapshot, [snapshot]);
+
+  async function signOut(): Promise<void> {
+    setLogoutPending(true);
+    setLogoutError(null);
+    try {
+      await provider.logout();
+      logoutRedirect("/cdn-cgi/access/logout");
+    } catch (cause: unknown) {
+      setLogoutError(cause instanceof Error ? cause.message : "Logout could not be completed.");
+      setLogoutPending(false);
+    }
+  }
+
   if (authenticationFailure !== null) {
     return <AuthenticationShell status={authenticationFailure.status} message={authenticationFailure.message} />;
   }
@@ -311,7 +335,7 @@ export function App({ provider = liveProvider }: { readonly provider?: Monitorin
             </div>
             <div className="popover-anchor operator-anchor">
               <button className="operator-button" type="button" aria-label="Open operator menu" aria-expanded={operatorOpen} onClick={() => setOperatorOpen((value) => !value)}><span>{userInitials(session.user.displayName)}</span><div><strong>{session.user.displayName}</strong><small>{displayRole(session.user.role)}</small></div><CaretDownIcon aria-hidden="true" size={13} /></button>
-              {operatorOpen && <div className="utility-popover operator-popover"><button type="button">Operator profile</button><button type="button">Keyboard shortcuts</button><form method="post" action="/auth/logout"><button type="submit">Sign out</button></form></div>}
+              {operatorOpen && <div className="utility-popover operator-popover"><button type="button">Operator profile</button><button type="button">Keyboard shortcuts</button><button type="button" disabled={logoutPending} onClick={() => { void signOut(); }}>{logoutPending ? "Signing out…" : "Sign out"}</button>{logoutError !== null && <p role="alert">{logoutError}</p>}</div>}
             </div>
           </div>
         </header>

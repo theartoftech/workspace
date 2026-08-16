@@ -488,10 +488,7 @@ validate_identity_credentials() {
     data_directory="$(resolve_env_path "$(env_value MONITORING_DATA_DIR)")"
     local role_mapping="$data_directory/runtime-secrets/cloudflare_access_roles"
     validate_locked_secret "Cloudflare Access role mapping" "$role_mapping"
-    grep -Eq '"version"[[:space:]]*:[[:space:]]*1' "$role_mapping" || \
-        fail "Cloudflare Access role mapping does not declare supported version 1: $role_mapping"
-    grep -Eq '"identities"[[:space:]]*:' "$role_mapping" || \
-        fail "Cloudflare Access role mapping does not declare identities: $role_mapping"
+    echo "Cloudflare Access role mapping metadata is valid; the UID 10001 API startup performs strict content validation."
 }
 
 verify_http() {

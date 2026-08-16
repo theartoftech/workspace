@@ -20,7 +20,7 @@
 | Monitoring foundation | 0 | Catalog, telemetry stack, probes, and guarded deployment automation |
 | Enterprise monitoring MVP | 1–3 | Application shell, lab portal deployment, live deployment inventory, and traffic/performance dashboards |
 | Operations workspace | 4–6 | Infrastructure topology, incident operations, and correlated logs/events |
-| Enterprise controls | 7–8 | SSO/RBAC and safe synthetic business journeys |
+| Enterprise controls | 7–8 | SSO/RBAC, PostgreSQL observability, and safe synthetic business journeys |
 | Cloud-ready release | 9 | Reproducible cloud deployment, backups, upgrades, and operational certification |
 
 ## Sprint portfolio
@@ -35,7 +35,8 @@
 | 4 | Infrastructure topology | Complete, deployed, and user-verified | Drill from an environment into workloads, nodes, and dependencies |
 | 5 | Alerts and incident operations | Complete, deployed, and user-verified | Persist, triage, acknowledge, silence, declare, and resolve alert-driven incidents |
 | 6 | Logs and event correlation | Complete, deployed, and user-verified | Move from a failed service to relevant logs and Kubernetes events |
-| 7 | Enterprise identity and access | Implemented and tested locally; deployment and human acceptance pending | Validate Cloudflare Access identity and verify role-scoped actions and audit records |
+| 7 | Enterprise identity and access | Deployed and automatically verified; human acceptance in progress | Validate Cloudflare Access identity and verify role-scoped actions and audit records |
+| 7.1 | PostgreSQL observability | Planned after Sprint 7 acceptance | Diagnose database availability, saturation, contention, and growth without exposing PostgreSQL publicly |
 | 8 | Safe synthetic journeys | Planned | Run non-destructive CPQ/OAuth/Mailpit/ERPNet journeys and see step diagnostics |
 | 9 | Cloud-ready operations | Planned | Install, upgrade, back up, restore, and roll back in an isolated target |
 
@@ -398,7 +399,7 @@ Add bounded log search and correlate application, probe, and Kubernetes evidence
 
 ### Status
 
-Implemented and tested locally on 2026-08-16. Cryptographic validation of the existing Cloudflare Access application assertion, exact host-provisioned roles, authenticated incident attribution, browser role awareness, authentication audit, reverse-proxy protection, and deployment guardrails are complete. No lab deployment or Cloudflare change has occurred. Exact team/audience values, identity mappings, deployment authorization, and human acceptance are pending.
+Implemented, deployed, and automatically verified on 2026-08-16. Cryptographic validation of the existing Cloudflare Access application assertion, exact host-provisioned roles, authenticated incident attribution, browser role awareness, authentication audit, reverse-proxy protection, and deployment guardrails are complete. Public-browser acceptance confirmed Cloudflare login and the configured Operator identity. A browser-specific logout CSRF failure was corrected locally and requires redeployment before logout and the remaining role matrix can complete human acceptance. No repository-managed Cloudflare configuration was changed.
 
 ### Objective
 
@@ -446,6 +447,63 @@ Reuse the existing Cloudflare Access login boundary, validate its signed identit
 - Identify human test users for all three roles and explicitly authorize deployment after the mapping file is provisioned.
 
 See [ADR 0007](adr/0007-enterprise-identity-access.md) for the complete architecture and failure contract.
+
+## Sprint 7.1: PostgreSQL observability
+
+### Status
+
+Planned immediately after Sprint 7 deployment and human acceptance, before Sprint 8 synthetic journeys.
+
+### Objective
+
+Add direct, least-privilege PostgreSQL health and performance evidence so operators can distinguish database failures from application and synthetic-journey failures.
+
+### Deliverables
+
+- A pinned PostgreSQL exporter deployed on private networking beside each explicitly approved PostgreSQL instance.
+- A dedicated read-only monitoring database role with only the minimum exporter permissions and separately provisioned credentials.
+- Private Prometheus scrape configuration with no public PostgreSQL, exporter, browser-tool, or Cloudflare tunnel exposure.
+- Environment- and service-scoped metrics for exporter/database availability, connection utilization, transaction rate, lock waits, deadlocks, long-running transactions, database size/growth, and replication lag where replication exists.
+- Bounded Workspace Monitor performance evidence and incident rules for the approved database signals, with honest unavailable, partial, stale, and no-data states.
+- Deployment preflight, verification, rollback, and credential-rotation guidance that does not print connection strings or credentials.
+- An explicit decision on whether `pg_stat_statements` is justified; it remains disabled unless its operational overhead and query-privacy implications are approved.
+
+### Acceptance criteria
+
+- Each approved PostgreSQL instance produces a current `pg_up` signal and the bounded metrics approved for its topology.
+- Prometheus and the exporter reach PostgreSQL only over approved private paths; no new public hostname, LoadBalancer, tunnel, or browser route is created.
+- The monitoring role cannot create, update, delete, truncate, execute application mutations, manage roles, or read application row data beyond explicitly required statistics views.
+- Workspace Monitor identifies the affected environment and database dependency without exposing hosts, usernames, connection strings, queries, bind values, schema contents, or credentials.
+- Connection saturation, sustained lock contention, deadlocks, unavailable exporters, unavailable databases, stale scrapes, and excessive metric cardinality have explicit and tested behavior.
+- A missing or invalid monitoring credential fails only the affected database evidence and never causes live mode to use fixtures or treat the database as healthy.
+- Existing PostgreSQL, CPQ, Keycloak, Grafana, Prometheus, Gatus, and portal workloads remain available during a guarded deployment and rollback exercise.
+- Automated tests, lint, type checks, builds, deployment contracts, and accessibility checks pass; server coverage remains at least 90%.
+
+### Failure modes to test
+
+- PostgreSQL is unreachable, restarting, read-only, overloaded, or rejects the monitoring connection.
+- The exporter is unavailable, times out, returns malformed metrics, or reports a stale scrape.
+- Credentials are missing, expired, rotated, incorrectly owned, over-privileged, or accidentally included in a diagnostic path.
+- One environment fails while other database evidence remains valid and clearly labeled partial.
+- Metrics are absent because a feature such as replication or a statistics extension is not enabled.
+- Lock, database, table, or query labels create unsafe cardinality or reveal sensitive identifiers.
+- Alert thresholds flap during short maintenance windows or remain silently healthy after evidence disappears.
+
+### Decisions required before implementation
+
+- Identify the exact PostgreSQL instances and environments in scope, including whether any database is shared.
+- Approve the exporter placement, private network path, TLS requirements, and monitoring-role grant procedure for each instance.
+- Approve the initial metric allowlist, alert thresholds, evaluation windows, and maintenance/silence behavior.
+- Decide whether database and schema names may be retained as metric labels or must be normalized to catalog identifiers.
+- Decide whether `pg_stat_statements` is allowed and, if so, define query-text suppression, cardinality bounds, retention, and redaction requirements.
+- Approve credential custody, secure installation, rotation, revocation, and rollback ownership outside Git.
+
+### Non-goals
+
+- Public database or exporter access, a Cloudflare database tunnel, or browser query tooling.
+- Query execution, schema browsing, row inspection, database administration, or automatic remediation.
+- Backup, restore, disaster recovery, storage migration, or production data retention; Sprint 9 owns those capabilities.
+- Durable database log aggregation or unrestricted slow-query capture.
 
 ## Sprint 8: Safe synthetic journeys
 

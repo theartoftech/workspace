@@ -22,7 +22,7 @@ Workspace Monitor consumes the `Cf-Access-Jwt-Assertion` header added by Cloudfl
 - rejects organization tokens, service tokens, malformed assertions, and unsupported algorithms;
 - never uses the `CF_Authorization` cookie, a browser payload, or an unvalidated forwarding field as identity.
 
-Cloudflare authentication lifecycle, session cookies, policy, tunnel, DNS, and identity-provider configuration remain external. Workspace Monitor implements no OIDC callback, client secret, refresh token, application session cookie, or Keycloak dependency. `/auth/logout` validates the current Access assertion and same-origin browser evidence, audits the action, and redirects to `/cdn-cgi/access/logout`.
+Cloudflare authentication lifecycle, session cookies, policy, tunnel, DNS, and identity-provider configuration remain external. Workspace Monitor implements no OIDC callback, client secret, refresh token, application session cookie, or Keycloak dependency. `/auth/logout` validates the current Access assertion, exact request origin, and application CSRF header before auditing and acknowledging the action. The browser navigates to the fixed `/cdn-cgi/access/logout` path only after that acknowledgement.
 
 ## Authorization model
 

@@ -41,10 +41,12 @@ def write_executable(path: Path, source: str) -> None:
 def provision_identity_runtime(temporary: Path) -> tuple[str, ...]:
     secret_directory = temporary / "data" / "runtime-secrets"
     secret_directory.mkdir(parents=True, exist_ok=True)
-    (secret_directory / "cloudflare_access_roles").write_text(
+    role_mapping = secret_directory / "cloudflare_access_roles"
+    role_mapping.write_text(
         '{"version":1,"identities":[{"email":"operator@example.test","displayName":"Lab Operator","role":"operator"}]}\n',
         encoding="utf-8",
     )
+    role_mapping.chmod(0)
     write_executable(temporary / "stat", "#!/usr/bin/env bash\nprintf '400 10001\\n'\n")
     return (
         "CLOUDFLARE_ACCESS_TEAM_DOMAIN=https://lab.cloudflareaccess.com",

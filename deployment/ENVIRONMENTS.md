@@ -117,7 +117,7 @@ It must be a regular file owned by UID/GID `10001` with exact mode `0400` and th
 }
 ```
 
-Use exact individual emails only. Wildcards, domain grants, duplicates, unknown roles, extra fields, empty mappings, and more than 100 identities are rejected. The file contains personal identity mappings and authorization policy: never print it, place it in shell history, commit it, synchronize it in a deployment archive, or include it in a support artifact. Preflight checks existence, exact ownership/mode, non-emptiness, version, and the identities field; application startup performs strict parsing without echoing values.
+Use exact individual emails only. Wildcards, domain grants, duplicates, unknown roles, extra fields, empty mappings, and more than 100 identities are rejected. The file contains personal identity mappings and authorization policy: never print it, place it in shell history, commit it, synchronize it in a deployment archive, or include it in a support artifact. Preflight runs as the unprivileged deployment user and checks existence, exact ownership/mode, and non-emptiness without reading the UID-`10001`-only content. Application startup as UID `10001` performs strict parsing and rejects invalid schema without echoing values.
 
 To change or revoke a role, replace the file atomically and restart only `inventory-api`. The next request is evaluated from the new mapping; no application session survives as a fallback. Cloudflare signing-key rotation is handled through the approved team JWKS endpoint. Back up `auth.sqlite` only through an approved encrypted operational process.
 

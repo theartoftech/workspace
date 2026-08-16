@@ -2,7 +2,7 @@
 
 ## Acceptance status
 
-Pending runtime identity provisioning, explicit deployment authorization, deployment verification, and human acceptance. Do not mark Sprint 7 deployed or accepted until every required section passes through the public TLS origin.
+Deployment verification passed on 2026-08-16. Public-browser acceptance is in progress: Cloudflare login and the configured Operator identity passed, while the corrected logout flow requires redeployment and retest. Do not mark Sprint 7 accepted until every required section passes through the public TLS origin.
 
 Run this only after the exact Cloudflare Access team domain and Workspace Monitor audience are approved, the Viewer/Operator/Administrator mapping file is provisioned, the candidate is explicitly deployed, and `deploy-lab-docker.sh verify` passes. Never capture Access assertions, authorization cookies, personal email claims, signing-key responses, mapping-file content, authentication database content, or raw audit payloads in tickets, chat, screenshots, recordings, or Git.
 
