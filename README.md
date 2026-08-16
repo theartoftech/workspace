@@ -2,7 +2,7 @@
 
 This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 6 are complete, deployed, and user-verified: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, read-only Kubernetes topology, persistent alert-driven incident operations, and bounded Kubernetes log and event correlation.
 
-Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 6 logs and event correlation completed deployment verification and human acceptance on 2026-08-15. Sprint 7 enterprise identity and access is deployed and passed automated verification; public-browser human acceptance is in progress, with Cloudflare login and Operator identity confirmed and the corrected logout flow pending redeployment. Sprint 7.1 PostgreSQL observability is planned immediately after Sprint 7 acceptance and before Sprint 8 synthetic journeys.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 6 logs and event correlation completed deployment verification and human acceptance on 2026-08-15. Sprint 7 enterprise identity and access is deployed and passed automated verification; public-browser human acceptance has confirmed Cloudflare login, Operator identity, and the corrected logout flow, while the remaining Viewer and Administrator role-matrix checks stay open. Sprint 7.1 PostgreSQL observability begins with read-only topology discovery before any exporter, role, or credential decision.
 
 ## Foundation scope
 

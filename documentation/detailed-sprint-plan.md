@@ -399,7 +399,7 @@ Add bounded log search and correlate application, probe, and Kubernetes evidence
 
 ### Status
 
-Implemented, deployed, and automatically verified on 2026-08-16. Cryptographic validation of the existing Cloudflare Access application assertion, exact host-provisioned roles, authenticated incident attribution, browser role awareness, authentication audit, reverse-proxy protection, and deployment guardrails are complete. Public-browser acceptance confirmed Cloudflare login and the configured Operator identity. A browser-specific logout CSRF failure was corrected locally and requires redeployment before logout and the remaining role matrix can complete human acceptance. No repository-managed Cloudflare configuration was changed.
+Implemented, deployed, and automatically verified on 2026-08-16. Cryptographic validation of the existing Cloudflare Access application assertion, exact host-provisioned roles, authenticated incident attribution, browser role awareness, authentication audit, reverse-proxy protection, and deployment guardrails are complete. Public-browser acceptance confirmed Cloudflare login, the configured Operator identity, and the corrected logout flow. Viewer and Administrator role-matrix checks remain open before Sprint 7 can be marked fully accepted. No repository-managed Cloudflare configuration was changed.
 
 ### Objective
 
@@ -452,7 +452,7 @@ See [ADR 0007](adr/0007-enterprise-identity-access.md) for the complete architec
 
 ### Status
 
-Planned immediately after Sprint 7 deployment and human acceptance, before Sprint 8 synthetic journeys.
+Discovery started after the deployed Sprint 7 logout correction passed public-browser testing. Exporter, monitoring-role, credential, and runtime changes remain blocked on the explicit topology and security decisions below. Implementation remains sequenced before Sprint 8 synthetic journeys.
 
 ### Objective
 
