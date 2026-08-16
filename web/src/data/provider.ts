@@ -23,9 +23,12 @@ const timeRanges = new Set<TimeRange>(["15m", "1h", "6h", "24h"]);
 const healthStates = new Set<HealthState>(["healthy", "degraded", "failing", "unknown", "paused", "stale"]);
 const performanceMetricIds = new Set<PerformanceMetricId>([
   "request-rate", "request-total", "error-rate", "latency-p50", "latency-p95", "latency-p99", "process-cpu",
-  "system-cpu", "jvm-heap", "host-memory", "db-pool-saturation", "pod-restarts"
+  "system-cpu", "jvm-heap", "host-memory", "db-pool-saturation", "db-availability", "db-connection-saturation",
+  "db-transaction-rate", "db-waiting-connections", "db-deadlocks", "db-longest-transaction", "db-size", "pod-restarts"
 ]);
-const performanceUnits = new Set<PerformanceUnit>(["requests/s", "requests", "percent", "milliseconds", "restarts"]);
+const performanceUnits = new Set<PerformanceUnit>([
+  "requests/s", "requests", "percent", "milliseconds", "restarts", "transactions/s", "connections", "deadlocks", "seconds", "bytes"
+]);
 const topologyKinds = new Set<TopologyResourceKind>(["Node", "Namespace", "Deployment", "StatefulSet", "Pod", "Service", "PersistentVolumeClaim", "Ingress"]);
 const incidentEnvironments = new Set<EnvironmentId>(["all", "demo", "test", "portfolio"]);
 const incidentSeverities = new Set<IncidentSeverity>(["P1", "P2", "P3"]);
@@ -391,6 +394,13 @@ function fixturePerformance(environment: EnvironmentId, serviceId: string, range
       metric("jvm-heap", "JVM heap utilization", "percent", points.map((point) => ({ ...point, value: 48 }))),
       metric("host-memory", "Lab host memory utilization", "percent", points.map((point) => ({ ...point, value: 62 }))),
       metric("db-pool-saturation", "Database pool saturation", "percent", points.map((point) => ({ ...point, value: 20 }))),
+      metric("db-availability", "PostgreSQL availability", "percent", points.map((point) => ({ ...point, value: 100 }))),
+      metric("db-connection-saturation", "PostgreSQL connection utilization", "percent", points.map((point) => ({ ...point, value: 18 }))),
+      metric("db-transaction-rate", "PostgreSQL transaction rate", "transactions/s", points.map((point) => ({ ...point, value: 2.4 }))),
+      metric("db-waiting-connections", "PostgreSQL waiting connections", "connections", points.map((point) => ({ ...point, value: 0 }))),
+      metric("db-deadlocks", "PostgreSQL deadlocks", "deadlocks", points.map((point) => ({ ...point, value: 0 }))),
+      metric("db-longest-transaction", "PostgreSQL longest transaction", "seconds", points.map((point) => ({ ...point, value: 4 }))),
+      metric("db-size", "PostgreSQL database size", "bytes", points.map((point) => ({ ...point, value: 64 * 1024 * 1024 }))),
       metric("pod-restarts", "Pod restarts", "restarts", points.map((point) => ({ ...point, value: 0 })))
     ]
   };

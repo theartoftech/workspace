@@ -3,7 +3,17 @@ import type { InventoryEnvironment } from "./inventory";
 export type PerformanceRange = "15m" | "1h" | "6h" | "24h";
 export type PerformanceMode = "live" | "partial";
 export type PerformanceMetricStatus = "ok" | "no-data" | "error";
-export type PerformanceUnit = "requests/s" | "requests" | "percent" | "milliseconds" | "restarts";
+export type PerformanceUnit =
+  | "requests/s"
+  | "requests"
+  | "percent"
+  | "milliseconds"
+  | "restarts"
+  | "transactions/s"
+  | "connections"
+  | "deadlocks"
+  | "seconds"
+  | "bytes";
 export type PerformanceMetricId =
   | "request-rate"
   | "request-total"
@@ -16,6 +26,13 @@ export type PerformanceMetricId =
   | "jvm-heap"
   | "host-memory"
   | "db-pool-saturation"
+  | "db-availability"
+  | "db-connection-saturation"
+  | "db-transaction-rate"
+  | "db-waiting-connections"
+  | "db-deadlocks"
+  | "db-longest-transaction"
+  | "db-size"
   | "pod-restarts";
 
 export interface PerformancePoint {

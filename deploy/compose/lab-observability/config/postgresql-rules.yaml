@@ -1,0 +1,61 @@
+groups:
+  - name: workspace-postgresql-recording
+    interval: 30s
+    rules:
+      - record: workspace_postgresql_available
+        expr: min by (service, environment) ({__name__=~"up|pg_up", job="postgresql"})
+      - record: workspace_postgresql_connection_saturation_percent
+        expr: 100 * sum by (service, environment) (pg_stat_database_numbackends{job="postgresql"}) / clamp_min(sum by (service, environment) (pg_settings_max_connections{job="postgresql"}), 1)
+      - record: workspace_postgresql_transaction_rate
+        expr: sum by (service, environment) (rate(pg_stat_database_xact_commit{job="postgresql"}[5m]) + rate(pg_stat_database_xact_rollback{job="postgresql"}[5m]))
+      - record: workspace_postgresql_waiting_connections
+        expr: sum by (service, environment) (pg_workspace_waiting_connections_count{job="postgresql"})
+      - record: workspace_postgresql_longest_transaction_seconds
+        expr: max by (service, environment) (pg_long_running_transactions_oldest_timestamp_seconds{job="postgresql"})
+      - record: workspace_postgresql_database_size_bytes
+        expr: sum by (service, environment) (pg_database_size_bytes{job="postgresql"})
+
+  - name: workspace-postgresql-alerts
+    interval: 30s
+    rules:
+      - alert: WorkspacePostgresqlExporterUnavailable
+        expr: up{job="postgresql"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL exporter is unavailable for the labeled service and environment.
+      - alert: WorkspacePostgresqlDatabaseUnavailable
+        expr: pg_up{job="postgresql"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: PostgreSQL is unavailable to its least-privilege exporter.
+      - alert: WorkspacePostgresqlConnectionSaturation
+        expr: workspace_postgresql_connection_saturation_percent > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL connection utilization has exceeded 80 percent for ten minutes.
+      - alert: WorkspacePostgresqlLockWaits
+        expr: workspace_postgresql_waiting_connections > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL has sustained waiting connections.
+      - alert: WorkspacePostgresqlDeadlock
+        expr: sum by (service, environment) (increase(pg_stat_database_deadlocks{job="postgresql"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL reported at least one deadlock in fifteen minutes.
+      - alert: WorkspacePostgresqlLongTransaction
+        expr: workspace_postgresql_longest_transaction_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL has sustained a transaction older than five minutes.

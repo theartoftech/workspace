@@ -116,6 +116,7 @@ services:
       - ${KUBERNETES_CLUSTER_DNS:-10.43.0.10}
     volumes:
       - ./config/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./config/postgresql-rules.yaml:/etc/prometheus/postgresql-rules.yaml:ro
       - prometheus-data:/prometheus
     tmpfs:
       - /tmp:size=32m,mode=1777

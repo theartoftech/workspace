@@ -74,6 +74,13 @@ function templates(services: readonly CatalogServiceDefinition[], rateWindow: st
     { id: "jvm-heap", label: "JVM heap utilization", unit: "percent", threshold: 80, query: `100 * sum(jvm_memory_used_bytes{service=~"${serviceSelector}",area="heap"}) / clamp_min(sum(jvm_memory_max_bytes{service=~"${serviceSelector}",area="heap"}), 1)` },
     { id: "host-memory", label: "Lab host memory utilization", unit: "percent", threshold: 85, query: "100 * (1 - avg(node_memory_MemAvailable_bytes{job=\"node-exporter\"}) / clamp_min(avg(node_memory_MemTotal_bytes{job=\"node-exporter\"}), 1))" },
     { id: "db-pool-saturation", label: "Database pool saturation", unit: "percent", threshold: 80, query: `100 * sum(hikaricp_connections_active{service=~"${serviceSelector}"}) / clamp_min(sum(hikaricp_connections_max{service=~"${serviceSelector}"}), 1)` },
+    { id: "db-availability", label: "PostgreSQL availability", unit: "percent", threshold: 100, query: `100 * min({__name__=~"up|pg_up",job="postgresql",service=~"${serviceSelector}"})` },
+    { id: "db-connection-saturation", label: "PostgreSQL connection utilization", unit: "percent", threshold: 80, query: `100 * sum(pg_stat_database_numbackends{job="postgresql",service=~"${serviceSelector}"}) / clamp_min(sum(pg_settings_max_connections{job="postgresql",service=~"${serviceSelector}"}), 1)` },
+    { id: "db-transaction-rate", label: "PostgreSQL transaction rate", unit: "transactions/s", threshold: null, query: `sum(rate(pg_stat_database_xact_commit{job="postgresql",service=~"${serviceSelector}"}[${rateWindow}]) + rate(pg_stat_database_xact_rollback{job="postgresql",service=~"${serviceSelector}"}[${rateWindow}]))` },
+    { id: "db-waiting-connections", label: "PostgreSQL waiting connections", unit: "connections", threshold: 1, query: `sum(pg_workspace_waiting_connections_count{job="postgresql",service=~"${serviceSelector}"})` },
+    { id: "db-deadlocks", label: "PostgreSQL deadlocks", unit: "deadlocks", threshold: 1, query: `sum(increase(pg_stat_database_deadlocks{job="postgresql",service=~"${serviceSelector}"}[${queryWindow}]))` },
+    { id: "db-longest-transaction", label: "PostgreSQL longest transaction", unit: "seconds", threshold: 300, query: `max(pg_long_running_transactions_oldest_timestamp_seconds{job="postgresql",service=~"${serviceSelector}"})` },
+    { id: "db-size", label: "PostgreSQL database size", unit: "bytes", threshold: null, query: `sum(pg_database_size_bytes{job="postgresql",service=~"${serviceSelector}"})` },
     { id: "pod-restarts", label: "Pod restarts", unit: "restarts", threshold: 1, query: `sum(increase(kube_pod_container_status_restarts_total{namespace=~"${namespaceSelector}",pod=~"${workloadSelector}.*"}[${rateWindow}]))` }
   ];
 }

@@ -76,6 +76,8 @@ describe("fixture monitoring provider", () => {
     expect(performance.mode).toBe("live");
     expect(performance.metrics.map((metric) => metric.id)).toContain("request-rate");
     expect(performance.metrics.map((metric) => metric.id)).toContain("request-total");
+    expect(performance.metrics.map((metric) => metric.id)).toContain("db-availability");
+    expect(performance.metrics.map((metric) => metric.id)).toContain("db-size");
     expect(performance.source.name).toBe("prometheus");
   });
 
@@ -149,7 +151,10 @@ describe("fixture monitoring provider", () => {
       serviceId: "cpq-demo",
       window: { range: "1h", start: "2026-08-13T17:00:00Z", end: "2026-08-13T18:00:00Z", stepSeconds: 60, maxPoints: 61 },
       source: { name: "prometheus", availability: "available", message: null },
-      metrics: [{ id: "request-rate", label: "Request rate", unit: "requests/s", status: "ok", points: [{ timestamp: "2026-08-13T17:59:00Z", value: 0 }], latest: 0, threshold: null, message: null }]
+      metrics: [
+        { id: "request-rate", label: "Request rate", unit: "requests/s", status: "ok", points: [{ timestamp: "2026-08-13T17:59:00Z", value: 0 }], latest: 0, threshold: null, message: null },
+        { id: "db-size", label: "PostgreSQL database size", unit: "bytes", status: "ok", points: [{ timestamp: "2026-08-13T17:59:00Z", value: 67108864 }], latest: 67108864, threshold: null, message: null }
+      ]
     }), { status: 200 })));
     const provider = createLiveMonitoringProvider({ fetchImpl, timeoutMs: 1000 });
 
@@ -160,6 +165,7 @@ describe("fixture monitoring provider", () => {
       expect.objectContaining({ method: "GET" })
     );
     expect(performance.metrics[0]).toMatchObject({ status: "ok", latest: 0 });
+    expect(performance.metrics[1]).toMatchObject({ id: "db-size", unit: "bytes", latest: 67108864 });
   });
 
   it("rejects malformed performance telemetry without substituting fixtures", async () => {

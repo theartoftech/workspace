@@ -1,0 +1,353 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workspace-monitor-postgresql-queries
+  namespace: default
+  labels:
+    app.kubernetes.io/component: database-observability
+    app.kubernetes.io/part-of: workspace-monitor
+data:
+  queries.yaml: |
+    pg_workspace_waiting_connections:
+      query: |
+        SELECT COUNT(*)::float AS count
+        FROM pg_catalog.pg_stat_activity
+        WHERE wait_event_type = 'Lock'
+          AND pid <> pg_backend_pid()
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Number of connections waiting on a PostgreSQL lock"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workspace-monitor-postgresql-exporter
+  namespace: default
+  labels:
+    app: workspace-monitor-postgresql-exporter
+    app.kubernetes.io/component: database-observability
+    app.kubernetes.io/part-of: workspace-monitor
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: workspace-monitor-postgresql-exporter
+  template:
+    metadata:
+      labels:
+        app: workspace-monitor-postgresql-exporter
+        app.kubernetes.io/component: database-observability
+        app.kubernetes.io/part-of: workspace-monitor
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: workspace-monitor-postgresql-exporter
+          image: ghcr.io/prometheus-community/postgres-exporter:v0.20.1@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=
+            - --extend.query-path=/etc/postgres-exporter/queries.yaml
+            - --web.listen-address=:9187
+            - --web.telemetry-path=/metrics
+            - --log.level=error
+            - --collector.database
+            - --collector.locks
+            - --collector.long_running_transactions
+            - --collector.settings
+            - --collector.stat_database
+            - --no-collector.database_wraparound
+            - --no-collector.postmaster
+            - --no-collector.process_idle
+            - --no-collector.replication
+            - --no-collector.replication_slots
+            - --no-collector.stat_activity_autovacuum
+            - --no-collector.stat_activity
+            - --no-collector.stat_archiver
+            - --no-collector.stat_bgwriter
+            - --no-collector.stat_checkpointer
+            - --no-collector.stat_progress_vacuum
+            - --no-collector.stat_replication
+            - --no-collector.stat_statements
+            - --no-collector.stat_statements.include_query
+            - --no-collector.stat_user_tables
+            - --no-collector.stat_wal_receiver
+            - --no-collector.statio_user_indexes
+            - --no-collector.statio_user_tables
+            - --no-collector.wal
+            - --no-collector.xlog_location
+          env:
+            - name: DATA_SOURCE_URI_FILE
+              value: /run/secrets/postgresql/uri
+            - name: DATA_SOURCE_USER_FILE
+              value: /run/secrets/postgresql/username
+            - name: DATA_SOURCE_PASS_FILE
+              value: /run/secrets/postgresql/password
+            - name: PG_EXPORTER_COLLECTION_TIMEOUT
+              value: 5s
+          ports:
+            - name: metrics
+              containerPort: 9187
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: postgresql-credentials
+              mountPath: /run/secrets/postgresql
+              readOnly: true
+            - name: postgresql-queries
+              mountPath: /etc/postgres-exporter
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: postgresql-credentials
+          secret:
+            secretName: workspace-monitor-postgresql-exporter
+            defaultMode: 0440
+            items:
+              - key: uri
+                path: uri
+              - key: username
+                path: username
+              - key: password
+                path: password
+        - name: postgresql-queries
+          configMap:
+            name: workspace-monitor-postgresql-queries
+            defaultMode: 0444
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-monitor-postgresql-exporter
+  namespace: default
+  labels:
+    app: workspace-monitor-postgresql-exporter
+    app.kubernetes.io/component: database-observability
+    app.kubernetes.io/part-of: workspace-monitor
+spec:
+  type: ClusterIP
+  selector:
+    app: workspace-monitor-postgresql-exporter
+  ports:
+    - name: metrics
+      port: 9187
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workspace-monitor-postgresql-queries
+  namespace: cpq-test
+  labels:
+    app.kubernetes.io/component: database-observability
+    app.kubernetes.io/part-of: workspace-monitor
+data:
+  queries.yaml: |
+    pg_workspace_waiting_connections:
+      query: |
+        SELECT COUNT(*)::float AS count
+        FROM pg_catalog.pg_stat_activity
+        WHERE wait_event_type = 'Lock'
+          AND pid <> pg_backend_pid()
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Number of connections waiting on a PostgreSQL lock"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workspace-monitor-postgresql-exporter
+  namespace: cpq-test
+  labels:
+    app: workspace-monitor-postgresql-exporter
+    app.kubernetes.io/component: database-observability
+    app.kubernetes.io/part-of: workspace-monitor
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: workspace-monitor-postgresql-exporter
+  template:
+    metadata:
+      labels:
+        app: workspace-monitor-postgresql-exporter
+        app.kubernetes.io/component: database-observability
+        app.kubernetes.io/part-of: workspace-monitor
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: workspace-monitor-postgresql-exporter
+          image: ghcr.io/prometheus-community/postgres-exporter:v0.20.1@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=
+            - --extend.query-path=/etc/postgres-exporter/queries.yaml
+            - --web.listen-address=:9187
+            - --web.telemetry-path=/metrics
+            - --log.level=error
+            - --collector.database
+            - --collector.locks
+            - --collector.long_running_transactions
+            - --collector.settings
+            - --collector.stat_database
+            - --no-collector.database_wraparound
+            - --no-collector.postmaster
+            - --no-collector.process_idle
+            - --no-collector.replication
+            - --no-collector.replication_slots
+            - --no-collector.stat_activity_autovacuum
+            - --no-collector.stat_activity
+            - --no-collector.stat_archiver
+            - --no-collector.stat_bgwriter
+            - --no-collector.stat_checkpointer
+            - --no-collector.stat_progress_vacuum
+            - --no-collector.stat_replication
+            - --no-collector.stat_statements
+            - --no-collector.stat_statements.include_query
+            - --no-collector.stat_user_tables
+            - --no-collector.stat_wal_receiver
+            - --no-collector.statio_user_indexes
+            - --no-collector.statio_user_tables
+            - --no-collector.wal
+            - --no-collector.xlog_location
+          env:
+            - name: DATA_SOURCE_URI_FILE
+              value: /run/secrets/postgresql/uri
+            - name: DATA_SOURCE_USER_FILE
+              value: /run/secrets/postgresql/username
+            - name: DATA_SOURCE_PASS_FILE
+              value: /run/secrets/postgresql/password
+            - name: PG_EXPORTER_COLLECTION_TIMEOUT
+              value: 5s
+          ports:
+            - name: metrics
+              containerPort: 9187
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: postgresql-credentials
+              mountPath: /run/secrets/postgresql
+              readOnly: true
+            - name: postgresql-queries
+              mountPath: /etc/postgres-exporter
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: postgresql-credentials
+          secret:
+            secretName: workspace-monitor-postgresql-exporter
+            defaultMode: 0440
+            items:
+              - key: uri
+                path: uri
+              - key: username
+                path: username
+              - key: password
+                path: password
+        - name: postgresql-queries
+          configMap:
+            name: workspace-monitor-postgresql-queries
+            defaultMode: 0444
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-monitor-postgresql-exporter
+  namespace: cpq-test
+  labels:
+    app: workspace-monitor-postgresql-exporter
+    app.kubernetes.io/component: database-observability
+    app.kubernetes.io/part-of: workspace-monitor
+spec:
+  type: ClusterIP
+  selector:
+    app: workspace-monitor-postgresql-exporter
+  ports:
+    - name: metrics
+      port: 9187
+      targetPort: metrics
+      protocol: TCP

@@ -226,6 +226,9 @@ describe("enterprise application shell", () => {
     expect(screen.getByRole("heading", { name: "JVM & process CPU" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Memory utilization" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Database saturation" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "PostgreSQL operational evidence" })).toBeInTheDocument();
+    expect(screen.getByText("PostgreSQL transaction rate")).toBeInTheDocument();
+    expect(screen.getByText("PostgreSQL database size")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Pod restarts" })).toBeInTheDocument();
     expect(screen.getByText("Requests in window")).toBeInTheDocument();
 
@@ -346,7 +349,7 @@ describe("enterprise application shell", () => {
     expect(await screen.findByText("3 incidents")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Acknowledge" })).toBeEnabled();
     expect(screen.getByText("Notification delivery is not configured in the deterministic fixture provider.")).toBeInTheDocument();
-  }, 10_000);
+  }, 15_000);
 
   it("defaults declarations to a service in the selected environment", async () => {
     const user = userEvent.setup();

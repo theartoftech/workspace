@@ -1,0 +1,80 @@
+rule_files:
+  - postgresql-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{job="postgresql",service="cpq-demo",environment="demo"}'
+        values: '0x20'
+      - series: 'pg_up{job="postgresql",service="cpq-demo",environment="demo"}'
+        values: '0x20'
+      - series: 'pg_stat_database_numbackends{job="postgresql",service="cpq-demo",environment="demo"}'
+        values: '90x20'
+      - series: 'pg_settings_max_connections{job="postgresql",service="cpq-demo",environment="demo"}'
+        values: '100x20'
+      - series: 'pg_workspace_waiting_connections_count{job="postgresql",service="cpq-demo",environment="demo"}'
+        values: '2x20'
+      - series: 'pg_stat_database_deadlocks{job="postgresql",service="cpq-demo",environment="demo"}'
+        values: '0+1x20'
+      - series: 'pg_long_running_transactions_oldest_timestamp_seconds{job="postgresql",service="cpq-demo",environment="demo"}'
+        values: '600x20'
+
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: WorkspacePostgresqlExporterUnavailable
+        exp_alerts:
+          - exp_labels:
+              environment: demo
+              job: postgresql
+              service: cpq-demo
+              severity: warning
+            exp_annotations:
+              summary: PostgreSQL exporter is unavailable for the labeled service and environment.
+      - eval_time: 16m
+        alertname: WorkspacePostgresqlDatabaseUnavailable
+        exp_alerts:
+          - exp_labels:
+              environment: demo
+              job: postgresql
+              service: cpq-demo
+              severity: critical
+            exp_annotations:
+              summary: PostgreSQL is unavailable to its least-privilege exporter.
+      - eval_time: 16m
+        alertname: WorkspacePostgresqlConnectionSaturation
+        exp_alerts:
+          - exp_labels:
+              environment: demo
+              service: cpq-demo
+              severity: warning
+            exp_annotations:
+              summary: PostgreSQL connection utilization has exceeded 80 percent for ten minutes.
+      - eval_time: 16m
+        alertname: WorkspacePostgresqlLockWaits
+        exp_alerts:
+          - exp_labels:
+              environment: demo
+              service: cpq-demo
+              severity: warning
+            exp_annotations:
+              summary: PostgreSQL has sustained waiting connections.
+      - eval_time: 16m
+        alertname: WorkspacePostgresqlDeadlock
+        exp_alerts:
+          - exp_labels:
+              environment: demo
+              service: cpq-demo
+              severity: warning
+            exp_annotations:
+              summary: PostgreSQL reported at least one deadlock in fifteen minutes.
+      - eval_time: 16m
+        alertname: WorkspacePostgresqlLongTransaction
+        exp_alerts:
+          - exp_labels:
+              environment: demo
+              service: cpq-demo
+              severity: warning
+            exp_annotations:
+              summary: PostgreSQL has sustained a transaction older than five minutes.

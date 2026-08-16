@@ -130,6 +130,14 @@ class SingleHostComposeContractTests(unittest.TestCase):
         self.assertIn("service: portfolio", prometheus)
         self.assertIn("KUBERNETES_CLUSTER_DNS:-10.43.0.10", (STACK_DIR / "compose.yaml").read_text(encoding="utf-8"))
 
+    def test_prometheus_loads_the_bounded_postgresql_rule_file(self) -> None:
+        compose = (STACK_DIR / "compose.yaml").read_text(encoding="utf-8")
+        prometheus = (STACK_DIR / "config/prometheus.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("./config/postgresql-rules.yaml:/etc/prometheus/postgresql-rules.yaml:ro", compose)
+        self.assertIn("rule_files:", prometheus)
+        self.assertIn("/etc/prometheus/postgresql-rules.yaml", prometheus)
+
     def test_cloudflare_hostname_points_at_loopback_grafana_for_sprint_zero(self) -> None:
         compose = (STACK_DIR / "compose.yaml").read_text(encoding="utf-8")
         example_environment = (STACK_DIR / ".env.example").read_text(encoding="utf-8")

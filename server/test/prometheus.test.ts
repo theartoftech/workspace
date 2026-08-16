@@ -40,16 +40,40 @@ describe("allow-listed Prometheus performance reader", () => {
       stepSeconds: 900,
       maxPoints: 97
     });
-    expect(snapshot.metrics).toHaveLength(12);
+    expect(snapshot.metrics).toHaveLength(19);
     expect(snapshot.metrics.every((metric) => !("query" in metric))).toBe(true);
-    expect(urls).toHaveLength(12);
+    expect(urls).toHaveLength(19);
     for (const rawUrl of urls) {
       const url = new URL(rawUrl);
       expect(url.pathname).toBe("/api/v1/query_range");
       expect(url.searchParams.get("step")).toBe("900");
-      expect(url.searchParams.get("query")).toMatch(/^(?:sum|avg|quantile|100)/u);
+      expect(url.searchParams.get("query")).toMatch(/^(?:sum|avg|max|quantile|100)/u);
       expect(url.searchParams.has("promql")).toBe(false);
     }
+  });
+
+  it("uses fixed PostgreSQL instance queries without returning labels or query text", async () => {
+    const queries: string[] = [];
+    const client: JsonHttpClient = {
+      async getJson(url): Promise<unknown> {
+        queries.push(new URL(url).searchParams.get("query") ?? "");
+        return matrix([[now.getTime() / 1000, "1"]]);
+      }
+    };
+
+    const snapshot = await reader(client).getPerformance("demo", "cpq-demo", "1h");
+    const ids = snapshot.metrics.map((item) => item.id);
+
+    expect(ids).toEqual(expect.arrayContaining([
+      "db-availability", "db-connection-saturation", "db-transaction-rate", "db-waiting-connections",
+      "db-deadlocks", "db-longest-transaction", "db-size"
+    ]));
+    expect(queries.some((query) => query.includes('__name__=~"up|pg_up"'))).toBe(true);
+    expect(queries.some((query) => query.includes("pg_stat_database_numbackends"))).toBe(true);
+    expect(queries.some((query) => query.includes("pg_workspace_waiting_connections_count"))).toBe(true);
+    expect(queries.some((query) => query.includes("pg_stat_database_deadlocks"))).toBe(true);
+    expect(queries.some((query) => /query|statement|usename|application_name/iu.test(query))).toBe(false);
+    expect(JSON.stringify(snapshot)).not.toMatch(/datname|instance|hostname|username|query/iu);
   });
 
   it("uses portfolio Nginx counters for actual request totals", async () => {

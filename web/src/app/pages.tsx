@@ -406,6 +406,15 @@ function formattedMetric(item: PerformanceMetric | undefined): string {
   if (item.unit === "percent") return `${item.latest.toFixed(1)}%`;
   if (item.unit === "milliseconds") return `${item.latest.toFixed(1)} ms`;
   if (item.unit === "requests") return `${Math.round(item.latest).toLocaleString()} requests`;
+  if (item.unit === "transactions/s") return `${item.latest.toFixed(2)} transactions/s`;
+  if (item.unit === "connections") return `${Math.round(item.latest).toLocaleString()} connections`;
+  if (item.unit === "deadlocks") return `${Math.round(item.latest).toLocaleString()} deadlocks`;
+  if (item.unit === "seconds") return `${item.latest.toFixed(1)} s`;
+  if (item.unit === "bytes") {
+    if (item.latest >= 1024 ** 3) return `${(item.latest / 1024 ** 3).toFixed(2)} GiB`;
+    if (item.latest >= 1024 ** 2) return `${(item.latest / 1024 ** 2).toFixed(1)} MiB`;
+    return `${Math.round(item.latest).toLocaleString()} bytes`;
+  }
   return `${Math.round(item.latest)} restarts`;
 }
 
@@ -445,6 +454,23 @@ function PerformanceChartPanel({ title, metrics, meta }: { readonly title: strin
         </div>
       ) : <div className="telemetry-empty"><WarningCircleIcon aria-hidden="true" size={22} /><strong>No chart data</strong><span>{metrics[0]?.message ?? "Prometheus returned no samples for this selection."}</span></div>}
       {available.length > 0 && metrics.some((item) => item.status !== "ok") && <div className="metric-diagnostics">{metrics.filter((item) => item.status !== "ok").map((item) => <p key={item.id}><strong>{item.label}:</strong> {item.message ?? "No telemetry"}</p>)}</div>}
+    </article>
+  );
+}
+
+function PostgreSqlEvidencePanel({ metrics }: { readonly metrics: readonly PerformanceMetric[] }): React.JSX.Element {
+  return (
+    <article className="panel performance-panel">
+      <PanelHeader title="PostgreSQL operational evidence" meta="current bounded values" />
+      <div className="correlation-grid">
+        {metrics.map((item) => (
+          <div key={item.id}>
+            <span>{item.label}</span>
+            <strong>{formattedMetric(item)}</strong>
+            {item.status !== "ok" && <small>{item.message ?? "No telemetry"}</small>}
+          </div>
+        ))}
+      </div>
     </article>
   );
 }
@@ -501,6 +527,8 @@ export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: P
             <MetricCard label="Server error rate" value={formattedMetric(metric(performance, "error-rate"))} note="HTTP server errors / request traffic" tone={(metric(performance, "error-rate")?.latest ?? 0) >= 1 ? "danger" : "positive"} icon={WarningCircleIcon} />
             <MetricCard label="p95 latency" value={formattedMetric(metric(performance, "latency-p95"))} note="Synthetic checks across selected services" icon={GaugeIcon} />
             <MetricCard label="Requests in window" value={formattedMetric(metric(performance, "request-total"))} note="Actual portfolio requests served by Nginx" icon={DatabaseIcon} />
+            <MetricCard label="PostgreSQL availability" value={formattedMetric(metric(performance, "db-availability"))} note="Exporter and database connection must both be current" tone={(metric(performance, "db-availability")?.latest ?? 0) === 100 ? "positive" : "danger"} icon={DatabaseIcon} />
+            <MetricCard label="PostgreSQL connections" value={formattedMetric(metric(performance, "db-connection-saturation"))} note="Current backends / configured maximum" tone={(metric(performance, "db-connection-saturation")?.latest ?? 0) >= 80 ? "danger" : "positive"} icon={GaugeIcon} />
           </section>
           <section className="performance-grid">
             <PerformanceChartPanel title="Traffic & server errors" meta="requests/s and percent" metrics={[metric(performance, "request-rate"), metric(performance, "error-rate")].filter((item): item is PerformanceMetric => item !== undefined)} />
@@ -508,6 +536,7 @@ export function PerformancePage({ snapshot, provider, timeRange, refreshKey }: P
             <PerformanceChartPanel title="JVM & process CPU" meta="process and application-host utilization" metrics={[metric(performance, "process-cpu"), metric(performance, "system-cpu")].filter((item): item is PerformanceMetric => item !== undefined)} />
             <PerformanceChartPanel title="Memory utilization" meta="JVM heap and lab host" metrics={[metric(performance, "jvm-heap"), metric(performance, "host-memory")].filter((item): item is PerformanceMetric => item !== undefined)} />
             <PerformanceChartPanel title="Database saturation" meta="Hikari active / max connections" metrics={[metric(performance, "db-pool-saturation")].filter((item): item is PerformanceMetric => item !== undefined)} />
+            <PostgreSqlEvidencePanel metrics={[metric(performance, "db-availability"), metric(performance, "db-connection-saturation"), metric(performance, "db-transaction-rate"), metric(performance, "db-waiting-connections"), metric(performance, "db-deadlocks"), metric(performance, "db-longest-transaction"), metric(performance, "db-size")].filter((item): item is PerformanceMetric => item !== undefined)} />
             <PerformanceChartPanel title="Pod restarts" meta="Increase within each query interval" metrics={[metric(performance, "pod-restarts")].filter((item): item is PerformanceMetric => item !== undefined)} />
           </section>
           <article className="panel performance-correlation">

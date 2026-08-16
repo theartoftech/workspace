@@ -452,7 +452,7 @@ See [ADR 0007](adr/0007-enterprise-identity-access.md) for the complete architec
 
 ### Status
 
-Discovery started after the deployed Sprint 7 logout correction passed public-browser testing. Exporter, monitoring-role, credential, and runtime changes remain blocked on the explicit topology and security decisions below. Implementation remains sequenced before Sprint 8 synthetic journeys.
+Implementation started after the deployed Sprint 7 logout correction passed public-browser testing. Read-only discovery confirmed independent PostgreSQL 17 services for CPQ Demo (`default`) and CPQ Test (`cpq-test`); ERPNext/MariaDB and Keycloak storage are out of scope. Hardened namespace-local exporter manifests, private Prometheus scrapes, metric/label allowlists, recording and alert rules, bounded portal panels, and an operator runbook are implemented locally. Ephemeral PostgreSQL 17 integration proved the proposed role cannot read application rows or create persistent tables, exporter success/failure states are explicit, and Prometheus drops unapproved metrics and sensitive labels. Database roles, credentials, Kubernetes resources, and the runtime candidate remain undeployed pending review and explicit authorization.
 
 ### Objective
 
@@ -489,14 +489,16 @@ Add direct, least-privilege PostgreSQL health and performance evidence so operat
 - Lock, database, table, or query labels create unsafe cardinality or reveal sensitive identifiers.
 - Alert thresholds flap during short maintenance windows or remain silently healthy after evidence disappears.
 
-### Decisions required before implementation
+### Decisions required before deployment
 
-- Identify the exact PostgreSQL instances and environments in scope, including whether any database is shared.
-- Approve the exporter placement, private network path, TLS requirements, and monitoring-role grant procedure for each instance.
+- Confirm the discovered CPQ Demo and CPQ Test instances are the complete initial scope and remain independent.
+- Approve namespace-local exporter placement, the current private network path, the PostgreSQL transport/TLS mode, and the `pg_read_all_stats`-only role procedure for each instance.
 - Approve the initial metric allowlist, alert thresholds, evaluation windows, and maintenance/silence behavior.
 - Decide whether database and schema names may be retained as metric labels or must be normalized to catalog identifiers.
 - Decide whether `pg_stat_statements` is allowed and, if so, define query-text suppression, cardinality bounds, retention, and redaction requirements.
 - Approve credential custody, secure installation, rotation, revocation, and rollback ownership outside Git.
+
+See [ADR 0008](adr/0008-postgresql-observability.md) and the [Sprint 7.1 operator runbook](../deployment/POSTGRESQL_OBSERVABILITY.md).
 
 ### Non-goals
 
