@@ -1,5 +1,7 @@
 # Sprint 7.1 PostgreSQL observability runbook
 
+Deployed and human-accepted on 2026-08-16. Retain this runbook for credential rotation, guarded redeployment, and rollback. The accepted lab configuration uses the existing private single-node transport with `sslmode=disable`; it does not claim PostgreSQL TLS is enabled.
+
 This runbook is a guarded operator procedure for CPQ Demo (`default`) and CPQ Test (`cpq-test`). It does not apply automatically through `deploy-lab-docker.sh`. Do not continue unless the database role, private transport mode, credential custody, and maintenance window are approved.
 
 Never paste passwords, connection strings, Secret YAML, tokens, or database output into Git, tickets, screenshots, chat, shell history, or deployment logs.

@@ -1,6 +1,6 @@
 # ADR 0008: Private least-privilege PostgreSQL observability
 
-- Status: Implemented locally; database provisioning, deployment, and human acceptance pending
+- Status: Accepted, deployed, and human-tested
 - Date: 2026-08-16
 - Sprint: 7.1 — PostgreSQL observability
 
@@ -80,8 +80,8 @@ These rules are local operational evidence. Notification delivery remains unconf
 ## Consequences
 
 - Operators gain direct database evidence without making PostgreSQL a browser or public network dependency.
-- Initial configuration uses the existing private PostgreSQL transport. The Secret-owned URI determines `sslmode`; the manifest does not weaken or override it. Enabling verified PostgreSQL TLS later requires server certificates and a separately mounted CA, not `sslmode=require` without certificate validation.
+- Initial configuration uses the explicitly accepted private single-node lab transport with `sslmode=disable`; both PostgreSQL servers reported `ssl=off` during deployment. Enabling verified PostgreSQL TLS later requires server certificates and a separately mounted CA, followed by `sslmode=verify-full`, not `sslmode=require` without certificate validation.
 - Exporter deployment is intentionally separate from the normal Docker deployment because it needs database-role and Kubernetes Secret preparation. Repository deployment scripts never create credentials, grant database roles, apply Kubernetes resources implicitly, or remove them.
 - ERPNext/MariaDB, Keycloak storage, backups, restore testing, database logs, automatic remediation, and query analytics remain out of scope.
 
-See [the Sprint 7.1 runbook](../../deployment/POSTGRESQL_OBSERVABILITY.md) for guarded provisioning, verification, rotation, and rollback.
+See [the Sprint 7.1 runbook](../../deployment/POSTGRESQL_OBSERVABILITY.md) for guarded provisioning, verification, rotation, and rollback, and the [human acceptance record](../sprint-7.1-human-test-script.md) for the deployed evidence.

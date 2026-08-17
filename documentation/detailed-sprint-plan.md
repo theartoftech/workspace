@@ -36,7 +36,7 @@
 | 5 | Alerts and incident operations | Complete, deployed, and user-verified | Persist, triage, acknowledge, silence, declare, and resolve alert-driven incidents |
 | 6 | Logs and event correlation | Complete, deployed, and user-verified | Move from a failed service to relevant logs and Kubernetes events |
 | 7 | Enterprise identity and access | Deployed and automatically verified; human acceptance in progress | Validate Cloudflare Access identity and verify role-scoped actions and audit records |
-| 7.1 | PostgreSQL observability | Planned after Sprint 7 acceptance | Diagnose database availability, saturation, contention, and growth without exposing PostgreSQL publicly |
+| 7.1 | PostgreSQL observability | Complete, deployed, and user-verified | Diagnose database availability, saturation, contention, and growth without exposing PostgreSQL publicly |
 | 8 | Safe synthetic journeys | Planned | Run non-destructive CPQ/OAuth/Mailpit/ERPNet journeys and see step diagnostics |
 | 9 | Cloud-ready operations | Planned | Install, upgrade, back up, restore, and roll back in an isolated target |
 
@@ -452,7 +452,7 @@ See [ADR 0007](adr/0007-enterprise-identity-access.md) for the complete architec
 
 ### Status
 
-Implementation started after the deployed Sprint 7 logout correction passed public-browser testing. Read-only discovery confirmed independent PostgreSQL 17 services for CPQ Demo (`default`) and CPQ Test (`cpq-test`); ERPNext/MariaDB and Keycloak storage are out of scope. Hardened namespace-local exporter manifests, private Prometheus scrapes, metric/label allowlists, recording and alert rules, bounded portal panels, and an operator runbook are implemented locally. Ephemeral PostgreSQL 17 integration proved the proposed role cannot read application rows or create persistent tables, exporter success/failure states are explicit, and Prometheus drops unapproved metrics and sensitive labels. Database roles, credentials, Kubernetes resources, and the runtime candidate remain undeployed pending review and explicit authorization.
+Complete, deployed, automatically verified, and human-tested on 2026-08-16. Independent PostgreSQL 17 services for CPQ Demo (`default`) and CPQ Test (`cpq-test`) now have separate `pg_read_all_stats`-only monitoring roles, namespace-local Secrets, hardened private exporters, allowlisted Prometheus evidence, recording and alert rules, and bounded portal panels. Both exporters were Ready with no restarts and reported `pg_up == 1`; the existing database pods remained available without replacement. Deployment verification passed, and public-browser acceptance confirmed current PostgreSQL evidence for both CPQ environments without adding PostgreSQL to the application service catalog. ERPNext/MariaDB and Keycloak storage remain out of scope.
 
 ### Objective
 
@@ -489,16 +489,16 @@ Add direct, least-privilege PostgreSQL health and performance evidence so operat
 - Lock, database, table, or query labels create unsafe cardinality or reveal sensitive identifiers.
 - Alert thresholds flap during short maintenance windows or remain silently healthy after evidence disappears.
 
-### Decisions required before deployment
+### Accepted deployment decisions
 
-- Confirm the discovered CPQ Demo and CPQ Test instances are the complete initial scope and remain independent.
-- Approve namespace-local exporter placement, the current private network path, the PostgreSQL transport/TLS mode, and the `pg_read_all_stats`-only role procedure for each instance.
-- Approve the initial metric allowlist, alert thresholds, evaluation windows, and maintenance/silence behavior.
-- Decide whether database and schema names may be retained as metric labels or must be normalized to catalog identifiers.
-- Decide whether `pg_stat_statements` is allowed and, if so, define query-text suppression, cardinality bounds, retention, and redaction requirements.
-- Approve credential custody, secure installation, rotation, revocation, and rollback ownership outside Git.
+- CPQ Demo and CPQ Test are the complete initial PostgreSQL scope and remain independently credentialed and monitored.
+- Each exporter is namespace-local and private. The existing trusted single-node lab transport uses explicitly accepted `sslmode=disable`; future TLS hardening must use verified certificates and `verify-full` rather than silently weakening validation.
+- Each database role receives only `CONNECT`, `pg_read_all_stats`, bounded timeouts, and a connection limit of two. Credentials remain namespace-local and outside Git and deployment archives.
+- Prometheus retains only the approved metric allowlist and catalog service/environment labels. Database, schema, host, username, connection, application, and query labels are not exposed to the portal.
+- `pg_stat_statements`, query text, table/index/WAL collectors, and replication collectors remain disabled. Notification delivery and persistent incident ingestion of these alert rules remain unconfigured.
+- Rotation, revocation, rollback, and any later PostgreSQL TLS work remain explicit operator procedures rather than deployment-script side effects.
 
-See [ADR 0008](adr/0008-postgresql-observability.md) and the [Sprint 7.1 operator runbook](../deployment/POSTGRESQL_OBSERVABILITY.md).
+See [ADR 0008](adr/0008-postgresql-observability.md), the [Sprint 7.1 operator runbook](../deployment/POSTGRESQL_OBSERVABILITY.md), and the [human acceptance record](sprint-7.1-human-test-script.md).
 
 ### Non-goals
 

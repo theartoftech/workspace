@@ -2,7 +2,7 @@
 
 This standalone repository is the operational monitoring application for the development lab. Its primary profile is a single Docker Compose stack on the CPQ server. Sprints 0 through 6 are complete, deployed, and user-verified: the portal combines live service inventory, internal and public-path reachability, bounded Prometheus performance queries, read-only Kubernetes topology, persistent alert-driven incident operations, and bounded Kubernetes log and event correlation.
 
-Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 6 logs and event correlation completed deployment verification and human acceptance on 2026-08-15. Sprint 7 enterprise identity and access is deployed and passed automated verification; public-browser human acceptance has confirmed Cloudflare login, Operator identity, and the corrected logout flow, while the remaining Viewer and Administrator role-matrix checks stay open. Sprint 7.1 PostgreSQL observability is implemented locally for the independently scoped CPQ Demo and CPQ Test databases; database roles, credentials, Kubernetes exporters, and the runtime candidate remain undeployed pending review and explicit authorization.
+Development is organized as reviewable increments in the [detailed sprint plan](documentation/detailed-sprint-plan.md). Sprint 6 logs and event correlation completed deployment verification and human acceptance on 2026-08-15. Sprint 7 enterprise identity and access is deployed and passed automated verification; public-browser human acceptance has confirmed Cloudflare login, Operator identity, and the corrected logout flow, while the remaining Viewer and Administrator role-matrix checks stay open. Sprint 7.1 PostgreSQL observability completed guarded deployment verification and public-browser human acceptance on 2026-08-16 for the independently scoped CPQ Demo and CPQ Test databases.
 
 ## Foundation scope
 
@@ -19,6 +19,7 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Incident operations | Deployed persistent SQLite incidents, inventory-health alert evaluation, bounded silences, state transitions, runbooks, and audit history |
 | Log correlation | Deployed direct Kubernetes pod-log and event correlation with fixed windows, server-side redaction, partial-source disclosure, and diagnostic JSON export |
 | Identity and access | Locally implemented Cloudflare Access JWT validation, exact host-provisioned Viewer/Operator/Administrator mappings, same-origin mutation protection, and bounded authentication audit |
+| PostgreSQL observability | Deployed private namespace-local exporters, least-privilege roles, allowlisted Prometheus evidence, bounded database panels, and alert rules for CPQ Demo and CPQ Test |
 | Alert delivery | Explicitly unconfigured until notification destinations and credential handling are selected |
 
 Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Sprint 6 adds direct, ephemeral Kubernetes pod logs rather than a durable aggregated log store. The Sprint 7 candidate protects application pages, APIs, and proxied tools by cryptographically validating the existing Cloudflare Access application assertion and derives every incident actor from an exact host-provisioned role mapping. CPQ Demo, CPQ Test, and their private Keycloak instances remain independent. Settings remains a preview. Notification delivery, durable log aggregation/retention, safe transaction journeys, and additional application scrapes remain later-sprint work.
@@ -41,6 +42,8 @@ Overview, deployments, service detail, infrastructure topology, and incident eva
 - `documentation/adr/0006-kubernetes-log-correlation.md` — selected lab log source, query bounds, redaction, partial-failure, export, and RBAC boundaries.
 - `documentation/adr/0007-enterprise-identity-access.md` — validated Cloudflare Access identity, exact role enforcement, failure behavior, and deployment decision gates.
 - `documentation/sprint-7-human-test-script.md` — pending public-origin Viewer/Operator/Administrator acceptance and privacy-safe evidence record.
+- `documentation/adr/0008-postgresql-observability.md` — private least-privilege PostgreSQL metrics, privacy boundaries, failure behavior, and deployment decisions.
+- `documentation/sprint-7.1-human-test-script.md` — accepted deployment and human-test record for CPQ Demo and CPQ Test database evidence.
 - `deployment/ENVIRONMENTS.md` — target topology, secret preparation, and operator workflow.
 - `probes/internal` — Gatus node intended to run inside the lab network.
 - `probes/external` — Gatus node intended to run on an independent public host.
