@@ -17,6 +17,7 @@ import type {
   IncidentTransitionCommand
 } from "../../../shared/incidents";
 import type { SessionResponse } from "../../../shared/auth";
+import type { SyntheticJourneySnapshot } from "../../../shared/synthetic";
 
 export type EnvironmentId = InventoryEnvironment;
 export type TimeRange = PerformanceRange;
@@ -49,6 +50,7 @@ export interface MonitoringProvider {
   getPerformance(environment: EnvironmentId, serviceId: string, timeRange: TimeRange): Promise<PerformanceSnapshot>;
   readonly getTopology?: (environment: EnvironmentId) => Promise<TopologySnapshot>;
   readonly getLogs?: (query: LogQuery) => Promise<LogCorrelationSnapshot>;
+  readonly getSyntheticJourneys?: () => Promise<SyntheticJourneySnapshot>;
   readonly getIncidents?: (environment: EnvironmentId, statusFilter: IncidentStatusFilter) => Promise<IncidentListResponse>;
   readonly getIncident?: (id: string) => Promise<IncidentDetailResponse>;
   readonly declareIncident?: (command: DeclareIncidentCommand) => Promise<IncidentDetailResponse>;
@@ -61,3 +63,4 @@ export type { DeclareIncidentCommand, IncidentDetailResponse, IncidentListRespon
 export type { PerformanceSnapshot } from "../../../shared/performance";
 export type { TopologySnapshot } from "../../../shared/topology";
 export type { LogCorrelationSnapshot, LogQuery, LogSeverity, LogSeverityFilter } from "../../../shared/logs";
+export type { SyntheticJourneySnapshot, SyntheticRunEvidence } from "../../../shared/synthetic";

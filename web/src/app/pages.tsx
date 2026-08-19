@@ -25,7 +25,7 @@ import type { LogCorrelationSnapshot, LogSeverityFilter } from "../../../shared/
 import type { TopologyResource, TopologyResourceKind, TopologySnapshot } from "../../../shared/topology";
 import { StateGallery } from "../components/StateGallery";
 import { StatusBadge } from "../components/StatusBadge";
-import type { IncidentDetailResponse, IncidentListResponse, IncidentStatusFilter, IncidentSummary, IncidentTransitionCommand, MonitoringProvider, OverviewSnapshot, PerformanceSnapshot, TimeRange, WorkspaceRole } from "../data/types";
+import type { IncidentDetailResponse, IncidentListResponse, IncidentStatusFilter, IncidentSummary, IncidentTransitionCommand, MonitoringProvider, OverviewSnapshot, PerformanceSnapshot, SyntheticJourneySnapshot, TimeRange, WorkspaceRole } from "../data/types";
 import { buildLogDiagnosticBundle } from "../data/diagnostics";
 
 interface SnapshotPageProps {
@@ -875,6 +875,53 @@ export function IncidentsPage({ snapshot, provider, environment, timeRange, refr
       {canMutate && declareOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDeclareOpen(false)}><form className="operator-dialog" role="dialog" aria-modal="true" aria-label="Declare incident" onSubmit={(event) => { void submitDeclaration(event); }} onMouseDown={(event) => event.stopPropagation()}><h2>Declare incident</h2><p>The incident, declaration reason, and audit entry are persisted by the server.</p><label><span>Incident title</span><input required minLength={3} maxLength={160} value={title} onChange={(event) => setTitle(event.target.value)} /></label><label><span>Affected service</span><select required value={serviceId} onChange={(event) => setServiceId(event.target.value)}>{snapshot.services.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}</select></label><label><span>Severity</span><select value={severity} onChange={(event) => setSeverity(event.target.value as IncidentSummary["severity"])}><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option></select></label><label><span>Declaration reason</span><textarea required minLength={3} maxLength={500} value={declarationReason} onChange={(event) => setDeclarationReason(event.target.value)} /></label>{commandError !== null && <p role="alert">{commandError}</p>}<div className="incident-actions"><button className="primary-button" type="submit" disabled={submitting}>Create incident</button><button className="secondary-button" type="button" onClick={() => setDeclareOpen(false)}>Cancel</button></div></form></div>}
       {canMutate && action !== null && selected !== null && <div className="modal-backdrop" role="presentation" onMouseDown={() => setAction(null)}><form className="operator-dialog" role="dialog" aria-modal="true" aria-label={actionLabels[action].title} onSubmit={(event) => { void submitTransition(event); }} onMouseDown={(event) => event.stopPropagation()}><h2>{actionLabels[action].title}</h2><p>This transition will be attributed to {list?.operator.displayName ?? "the authenticated operator"} and appended to immutable incident history.</p><label><span>Reason</span><textarea required minLength={3} maxLength={500} value={actionReason} onChange={(event) => setActionReason(event.target.value)} /></label>{action === "silence" && <label><span>Silence duration</span><select value={silenceDuration} onChange={(event) => setSilenceDuration(Number(event.target.value) as typeof silenceDuration)}><option value={15}>15 minutes</option><option value={60}>1 hour</option><option value={360}>6 hours</option><option value={1440}>24 hours</option></select></label>}{commandError !== null && <p role="alert">{commandError}</p>}<div className="incident-actions"><button className="primary-button" type="submit" disabled={submitting}>{actionLabels[action].confirm}</button><button className="secondary-button" type="button" onClick={() => setAction(null)}>Cancel</button></div></form></div>}
       {runbookOpen && selected !== null && <div className="modal-backdrop" role="presentation" onMouseDown={() => setRunbookOpen(false)}><section className="operator-dialog" role="dialog" aria-modal="true" aria-label={`${selected.serviceName} runbook`} onMouseDown={(event) => event.stopPropagation()}><span className="eyebrow">Runbook / {selected.serviceName}</span><h2>{selected.runbook.title}</h2><ol>{selected.runbook.steps.map((step) => <li key={step}>{step}</li>)}</ol><button className="secondary-button" type="button" onClick={() => setRunbookOpen(false)}>Close runbook</button></section></div>}
+    </>
+  );
+}
+
+export function JourneysPage({ provider, refreshKey }: { readonly provider: MonitoringProvider; readonly refreshKey: number }): React.JSX.Element {
+  const [snapshot, setSnapshot] = useState<SyntheticJourneySnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setSnapshot(null);
+    setError(null);
+    if (provider.getSyntheticJourneys === undefined) {
+      setError("Synthetic journey evidence is not configured.");
+      return () => { active = false; };
+    }
+    void provider.getSyntheticJourneys()
+      .then((response) => { if (active) setSnapshot(response); })
+      .catch(() => { if (active) setError("Synthetic journey evidence is unavailable."); });
+    return () => { active = false; };
+  }, [provider, refreshKey]);
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="Operations / Journeys"
+        title="Synthetic journeys"
+        description="Bounded user-path evidence with isolated environments, explicit partial failures, and verified cleanup state."
+      />
+      {error !== null ? <section className="panel journey-status-panel"><p role="alert">{error}</p></section> : snapshot === null ? <section className="panel journey-status-panel"><p>Loading journey evidence…</p></section> : <>
+        <section className={`panel journey-status-panel journey-runner-${snapshot.runner.state}`} aria-label="Synthetic runner status">
+          <div><strong>{snapshot.runner.state === "disabled" ? "Runner disabled" : snapshot.runner.state === "available" ? "Runner available" : "Runner unavailable"}</strong><span>Definition contract v{snapshot.definitionVersion}</span></div>
+          <p>{snapshot.runner.message}</p>
+        </section>
+        <section className="journey-grid" aria-label="Journey definitions">
+          {snapshot.journeys.map((journey) => <article className="panel journey-card" key={journey.id}>
+            <div className="journey-card-heading"><span className={`journey-state journey-state-${journey.state}`}>{journey.state.replace("-", " ")}</span><span className="environment-chip">{journey.effect}</span></div>
+            <h2>{journey.displayName}</h2>
+            <p>{journey.enabled ? "Enabled by the server-side control plane." : "Independently disabled."}</p>
+            {journey.lastRun === null ? <span className="journey-last-run">No recorded run</span> : <span className="journey-last-run">Last run {formattedTimestamp(journey.lastRun.finishedAt)} · {journey.lastRun.status}</span>}
+          </article>)}
+        </section>
+        <section className="panel journey-history">
+          <PanelHeader title="Recent journey evidence" meta={`Bounded to ${snapshot.recentRuns.length} recorded runs`} />
+          {snapshot.recentRuns.length === 0 ? <p className="empty-panel-copy">No journey runs have been recorded.</p> : <div className="table-scroll"><table><thead><tr><th scope="col">Journey</th><th scope="col">Environment</th><th scope="col">Result</th><th scope="col">Steps</th><th scope="col">Cleanup</th><th scope="col">Finished</th></tr></thead><tbody>{snapshot.recentRuns.map((run) => <tr key={run.runId}><td>{run.definitionId}</td><td>{run.environment}</td><td>{run.status}</td><td>{run.steps.length}</td><td>{run.cleanup.status}</td><td>{formattedTimestamp(run.finishedAt)}</td></tr>)}</tbody></table></div>}
+        </section>
+      </>}
     </>
   );
 }

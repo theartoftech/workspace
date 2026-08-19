@@ -27,6 +27,7 @@ import {
   IncidentsPage,
   InfrastructurePage,
   LogsPage,
+  JourneysPage,
   OverviewPage,
   PerformancePage,
   ServiceDetailPage,
@@ -46,6 +47,7 @@ const primaryNavigation: readonly NavigationItem[] = [
   { label: "Performance", path: "/performance", icon: ChartLineUpIcon },
   { label: "Incidents", path: "/incidents", icon: WarningOctagonIcon },
   { label: "Logs", path: "/logs", icon: TerminalWindowIcon },
+  { label: "Journeys", path: "/journeys", icon: PulseIcon },
   { label: "Settings", path: "/settings", icon: GearIcon }
 ];
 
@@ -114,7 +116,7 @@ function Sidebar({ open, onClose, snapshot, activeIncidentCount }: { readonly op
       </div>
       <nav className="primary-nav">
         <span className="nav-section-label">OPERATIONS</span>
-        {primaryNavigation.slice(0, 6).map((item) => {
+        {primaryNavigation.slice(0, 7).map((item) => {
           const Icon = item.icon;
           return (
             <NavLink key={item.path} to={item.path} end={item.path === "/"} aria-label={item.label} onClick={onClose}>
@@ -123,7 +125,7 @@ function Sidebar({ open, onClose, snapshot, activeIncidentCount }: { readonly op
           );
         })}
         <span className="nav-section-label governance-label">GOVERNANCE</span>
-        {primaryNavigation.slice(6).map((item) => {
+        {primaryNavigation.slice(7).map((item) => {
           const Icon = item.icon;
           return <NavLink key={item.path} to={item.path} aria-label={item.label} onClick={onClose}>{({ isActive }) => <><Icon aria-hidden={true} size={19} weight={isActive ? "fill" : "regular"} /><span>{item.label}</span></>}</NavLink>;
         })}
@@ -358,6 +360,7 @@ export function App({ provider = liveProvider, logoutRedirect = redirectToCloudf
               <Route path="/performance" element={<PerformancePage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
               <Route path="/incidents" element={<IncidentsPage snapshot={routeSnapshot} provider={provider} environment={environment} timeRange={timeRange} refreshKey={incidentRefreshKey} role={session.user.role} onMutated={() => setIncidentRefreshKey((value) => value + 1)} />} />
               <Route path="/logs" element={<LogsPage snapshot={routeSnapshot} provider={provider} timeRange={timeRange} refreshKey={refreshKey} />} />
+              <Route path="/journeys" element={<JourneysPage provider={provider} refreshKey={refreshKey} />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<ErrorShell message="The requested monitoring route does not exist." />} />
             </Routes>

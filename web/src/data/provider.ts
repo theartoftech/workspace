@@ -15,6 +15,7 @@ import type {
 } from "../../../shared/incidents";
 import type { PerformanceMetric, PerformanceMetricId, PerformanceSnapshot, PerformanceUnit } from "../../../shared/performance";
 import type { TopologyEdge, TopologyResource, TopologyResourceKind, TopologySnapshot } from "../../../shared/topology";
+import type { SyntheticCleanupEvidence, SyntheticFailureCode, SyntheticFailureEvidence, SyntheticJourneyDefinitionId, SyntheticJourneySnapshot, SyntheticRunEvidence, SyntheticStepEvidence } from "../../../shared/synthetic";
 import { incidentFixtures, serviceFixtures, trafficFixtures } from "./fixtures";
 import type { EnvironmentId, MonitoringProvider, OverviewSnapshot, TimeRange } from "./types";
 
@@ -39,6 +40,32 @@ const logEnvironments = new Set<EnvironmentId>(["all", "demo", "test", "portfoli
 const logSeverities = new Set(["all", "error", "warning", "info", "debug", "unknown"]);
 const entrySeverities = new Set(["error", "warning", "info", "debug", "unknown"]);
 const workspaceRoles = new Set<WorkspaceRole>(["viewer", "operator", "administrator"]);
+const syntheticDefinitionIds = new Set(["oauth-cpq-read", "cpq-record-lifecycle", "mailpit-delivery", "erpnext-read"]);
+const syntheticStates = new Set(["disabled", "not-configured", "running", "healthy", "failing", "unavailable"]);
+const syntheticFailureCodes = new Set(["token_rejected", "token_timeout", "token_malformed", "token_expired", "wrong_environment", "provider_timeout", "provider_rejected", "provider_malformed", "provider_unavailable", "cleanup_failed"]);
+const syntheticFailureMessages: Readonly<Record<SyntheticFailureCode, string>> = {
+  token_rejected: "Identity provider rejected the request.",
+  token_timeout: "Identity provider request timed out.",
+  token_malformed: "Identity provider returned a malformed response.",
+  token_expired: "Identity provider returned an expired result.",
+  wrong_environment: "Provider evidence did not match the selected environment.",
+  provider_timeout: "Provider request timed out.",
+  provider_rejected: "Provider rejected the request.",
+  provider_malformed: "Provider returned a malformed response.",
+  provider_unavailable: "Provider is unavailable.",
+  cleanup_failed: "Synthetic cleanup could not be completed."
+};
+const syntheticDefinitionContracts: Readonly<Record<SyntheticJourneyDefinitionId, {
+  readonly displayName: string;
+  readonly effect: "read-only" | "reversible";
+  readonly steps: readonly string[];
+  readonly cleanupStep: string | null;
+}>> = {
+  "oauth-cpq-read": { displayName: "OAuth and CPQ authenticated read", effect: "read-only", steps: ["acquire-token", "authenticated-read"], cleanupStep: null },
+  "cpq-record-lifecycle": { displayName: "CPQ synthetic record lifecycle", effect: "reversible", steps: ["acquire-token", "create-record", "read-record", "update-record", "verify-record"], cleanupStep: "cleanup-record" },
+  "mailpit-delivery": { displayName: "Mailpit delivery confirmation", effect: "reversible", steps: ["send-message", "confirm-message"], cleanupStep: "cleanup-message" },
+  "erpnext-read": { displayName: "ERPNext read-only verification", effect: "read-only", steps: ["read-erpnext"], cleanupStep: null }
+};
 
 export class MonitoringRequestError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -67,6 +94,140 @@ function summarize(services: readonly ServiceInventory[]): OverviewSnapshot["sum
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function hasExactFields(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === fields.length && fields.every((field) => field in value);
+}
+
+function isBoundedText(value: unknown, maximum: number): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maximum) return false;
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 31 || code === 127) return false;
+  }
+  return true;
+}
+
+function timestampValue(value: unknown): number | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) || new Date(parsed).toISOString() !== value ? null : parsed;
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  return timestampValue(value) !== null;
+}
+
+function isSyntheticFailureCode(value: unknown): value is SyntheticFailureCode {
+  return typeof value === "string" && syntheticFailureCodes.has(value);
+}
+
+function isSyntheticDefinitionId(value: unknown): value is SyntheticJourneyDefinitionId {
+  return typeof value === "string" && syntheticDefinitionIds.has(value);
+}
+
+function isSyntheticFailure(value: unknown): value is SyntheticFailureEvidence {
+  const raw = record(value);
+  return raw !== null
+    && hasExactFields(raw, ["code", "message"])
+    && isSyntheticFailureCode(raw.code)
+    && raw.message === syntheticFailureMessages[raw.code];
+}
+
+function isDuration(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 300_000;
+}
+
+function isSyntheticStep(value: unknown): value is SyntheticStepEvidence {
+  const raw = record(value);
+  return raw !== null
+    && hasExactFields(raw, ["stepId", "status", "durationMs", "failure"])
+    && isBoundedText(raw.stepId, 64)
+    && (raw.status === "succeeded" || raw.status === "failed")
+    && isDuration(raw.durationMs)
+    && (raw.status === "succeeded" ? raw.failure === null : isSyntheticFailure(raw.failure) && raw.failure.code !== "cleanup_failed");
+}
+
+function isSyntheticCleanup(value: unknown): value is SyntheticCleanupEvidence {
+  const raw = record(value);
+  if (raw === null || !hasExactFields(raw, ["status", "stepId", "durationMs", "failure"])) return false;
+  if (raw.status === "not-required") return raw.stepId === null && raw.durationMs === 0 && raw.failure === null;
+  if (!isBoundedText(raw.stepId, 64) || !isDuration(raw.durationMs)) return false;
+  return raw.status === "succeeded" ? raw.failure === null : raw.status === "failed" && isSyntheticFailure(raw.failure) && raw.failure.code === "cleanup_failed";
+}
+
+function isSyntheticRun(value: unknown): value is SyntheticRunEvidence {
+  const raw = record(value);
+  if (raw === null || !hasExactFields(raw, ["runId", "definitionId", "environment", "status", "startedAt", "finishedAt", "steps", "cleanup", "orphanIdentifier"])) return false;
+  if (!isSyntheticDefinitionId(raw.definitionId)) return false;
+  const contract = syntheticDefinitionContracts[raw.definitionId];
+  const startedAt = timestampValue(raw.startedAt);
+  const finishedAt = timestampValue(raw.finishedAt);
+  if (typeof raw.runId !== "string" || !/^run-[a-z0-9]{12}$/u.test(raw.runId)
+    || (raw.environment !== "demo" && raw.environment !== "test")
+    || (raw.status !== "succeeded" && raw.status !== "failed")
+    || startedAt === null
+    || finishedAt === null
+    || finishedAt < startedAt
+    || !Array.isArray(raw.steps)
+    || raw.steps.length === 0
+    || raw.steps.length > contract.steps.length
+    || !raw.steps.every(isSyntheticStep)
+    || !isSyntheticCleanup(raw.cleanup)) return false;
+  const failedStepIndexes = raw.steps.flatMap((step, index) => step.status === "failed" ? [index] : []);
+  if (raw.steps.some((step, index) => step.stepId !== contract.steps[index])
+    || failedStepIndexes.length > 1
+    || failedStepIndexes.length === 1 && failedStepIndexes[0] !== raw.steps.length - 1
+    || failedStepIndexes.length === 0 && raw.steps.length !== contract.steps.length) return false;
+  if (contract.cleanupStep === null
+    ? raw.cleanup.status !== "not-required"
+    : raw.cleanup.status === "not-required" || raw.cleanup.stepId !== contract.cleanupStep) return false;
+  const failed = failedStepIndexes.length === 1 || raw.cleanup.status === "failed";
+  if ((raw.status === "failed") !== failed) return false;
+  const expectedOrphan = raw.cleanup.status === "failed"
+    ? `WSM_SYN_V1_${raw.environment.toUpperCase()}_${raw.runId}`
+    : null;
+  return raw.orphanIdentifier === expectedOrphan;
+}
+
+function parseSyntheticJourneys(value: unknown): SyntheticJourneySnapshot {
+  const raw = record(value);
+  const runner = record(raw?.runner);
+  if (raw === null
+    || !hasExactFields(raw, ["apiVersion", "definitionVersion", "assembledAt", "runner", "journeys", "recentRuns"])
+    || raw.apiVersion !== 1
+    || raw.definitionVersion !== 1
+    || !isIsoTimestamp(raw.assembledAt)
+    || runner === null
+    || !hasExactFields(runner, ["state", "message"])
+    || !["disabled", "available", "unavailable"].includes(String(runner.state))
+    || !isBoundedText(runner.message, 240)
+    || !Array.isArray(raw.journeys)
+    || raw.journeys.length !== 4
+    || !Array.isArray(raw.recentRuns)
+    || raw.recentRuns.length > 100
+    || !raw.recentRuns.every(isSyntheticRun)
+    || new Set(raw.recentRuns.map((run) => (record(run)?.runId))).size !== raw.recentRuns.length) throw new Error("Synthetic journey API returned a malformed response");
+  const ids = new Set<string>();
+  for (const value of raw.journeys) {
+    const journey = record(value);
+    if (journey === null
+      || !hasExactFields(journey, ["id", "displayName", "effect", "enabled", "state", "lastRun"])
+      || !isSyntheticDefinitionId(journey.id)
+      || ids.has(journey.id)
+      || journey.displayName !== syntheticDefinitionContracts[journey.id].displayName
+      || journey.effect !== syntheticDefinitionContracts[journey.id].effect
+      || typeof journey.enabled !== "boolean"
+      || !syntheticStates.has(String(journey.state))
+      || (!journey.enabled && journey.state !== "disabled")
+      || (journey.enabled && journey.state === "disabled")
+      || !(journey.lastRun === null || isSyntheticRun(journey.lastRun) && journey.lastRun.definitionId === journey.id)) throw new Error("Synthetic journey API returned a malformed response");
+    ids.add(journey.id);
+  }
+  if (runner.state === "disabled" && raw.journeys.some((journey) => record(journey)?.enabled === true)) throw new Error("Synthetic journey API returned a malformed response");
+  return value as SyntheticJourneySnapshot;
 }
 
 function isService(value: unknown): value is ServiceInventory {
@@ -510,6 +671,21 @@ export function createFixtureMonitoringProvider(): MonitoringProvider {
     getLogs(query: LogQuery): Promise<LogCorrelationSnapshot> {
       return Promise.resolve().then(() => fixtureLogs(query));
     },
+    getSyntheticJourneys(): Promise<SyntheticJourneySnapshot> {
+      return Promise.resolve({
+        apiVersion: 1,
+        definitionVersion: 1,
+        assembledAt: "2026-08-17T14:00:00.000Z",
+        runner: { state: "disabled", message: "No synthetic journey is enabled. Existing monitoring remains independent." },
+        journeys: [
+          { id: "oauth-cpq-read", displayName: "OAuth and CPQ authenticated read", effect: "read-only", enabled: false, state: "disabled", lastRun: null },
+          { id: "cpq-record-lifecycle", displayName: "CPQ synthetic record lifecycle", effect: "reversible", enabled: false, state: "disabled", lastRun: null },
+          { id: "mailpit-delivery", displayName: "Mailpit delivery confirmation", effect: "reversible", enabled: false, state: "disabled", lastRun: null },
+          { id: "erpnext-read", displayName: "ERPNext read-only verification", effect: "read-only", enabled: false, state: "disabled", lastRun: null }
+        ],
+        recentRuns: []
+      });
+    },
     getIncidents(environment: EnvironmentId, statusFilter: IncidentStatusFilter): Promise<IncidentListResponse> {
       return Promise.resolve().then(() => {
         if (!incidentEnvironments.has(environment) || !incidentStatusFilters.has(statusFilter)) throw new Error("Unsupported incident filter");
@@ -659,6 +835,9 @@ export function createLiveMonitoringProvider(options: LiveMonitoringProviderOpti
       parameters.set("query", query.query);
       parameters.set("correlationId", query.correlationId);
       return parseLogs(await fetchJson(`/api/v1/logs?${parameters.toString()}`, "Log API"));
+    },
+    async getSyntheticJourneys(): Promise<SyntheticJourneySnapshot> {
+      return parseSyntheticJourneys(await fetchJson("/api/v1/journeys", "Synthetic journey API"));
     },
     async getIncidents(environment: EnvironmentId, statusFilter: IncidentStatusFilter): Promise<IncidentListResponse> {
       if (!incidentEnvironments.has(environment) || !incidentStatusFilters.has(statusFilter)) throw new Error("Unsupported incident filter");

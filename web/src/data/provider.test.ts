@@ -94,6 +94,62 @@ describe("fixture monitoring provider", () => {
     expect(logs?.events.length).toBeGreaterThan(0);
   });
 
+  it("loads strictly bounded synthetic journey evidence without exposing bindings", async () => {
+    const payload = {
+      apiVersion: 1,
+      definitionVersion: 1,
+      assembledAt: "2026-08-17T14:00:00.000Z",
+      runner: { state: "disabled", message: "No synthetic journey is enabled." },
+      journeys: [
+        { id: "oauth-cpq-read", displayName: "OAuth and CPQ authenticated read", effect: "read-only", enabled: false, state: "disabled", lastRun: null },
+        { id: "cpq-record-lifecycle", displayName: "CPQ synthetic record lifecycle", effect: "reversible", enabled: false, state: "disabled", lastRun: null },
+        { id: "mailpit-delivery", displayName: "Mailpit delivery confirmation", effect: "reversible", enabled: false, state: "disabled", lastRun: null },
+        { id: "erpnext-read", displayName: "ERPNext read-only verification", effect: "read-only", enabled: false, state: "disabled", lastRun: null }
+      ],
+      recentRuns: []
+    } as const;
+    const fetchImpl = vi.fn((): Promise<Response> => Promise.resolve(new Response(JSON.stringify(payload), { status: 200 })));
+    const live = createLiveMonitoringProvider({ fetchImpl, timeoutMs: 1000 });
+
+    await expect(createFixtureMonitoringProvider().getSyntheticJourneys?.()).resolves.toMatchObject({ definitionVersion: 1, runner: { state: "disabled" } });
+    await expect(live.getSyntheticJourneys?.()).resolves.toEqual(payload);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/journeys", expect.objectContaining({ method: "GET" }));
+
+    const malformed = createLiveMonitoringProvider({
+      fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ ...payload, recentRuns: [{ token: "leak" }] }), { status: 200 })),
+      timeoutMs: 1000
+    });
+    await expect(malformed.getSyntheticJourneys?.()).rejects.toThrow("Synthetic journey API returned a malformed response");
+
+    const validRun = {
+      runId: "run-000000000001",
+      definitionId: "oauth-cpq-read",
+      environment: "test",
+      status: "succeeded",
+      startedAt: "2026-08-17T14:00:00.000Z",
+      finishedAt: "2026-08-17T14:00:01.000Z",
+      steps: [
+        { stepId: "acquire-token", status: "succeeded", durationMs: 100, failure: null },
+        { stepId: "authenticated-read", status: "succeeded", durationMs: 100, failure: null }
+      ],
+      cleanup: { status: "not-required", stepId: null, durationMs: 0, failure: null },
+      orphanIdentifier: null
+    } as const;
+    const adversarialRuns = [
+      { ...validRun, status: "failed" },
+      { ...validRun, finishedAt: "2026-08-17T13:59:59.000Z" },
+      { ...validRun, steps: [{ stepId: "attacker-selected-step", status: "succeeded", durationMs: 1, failure: null }] },
+      { ...validRun, cleanup: { status: "failed", stepId: "cleanup-record", durationMs: 1, failure: { code: "cleanup_failed", message: "Bearer private-value" } }, orphanIdentifier: "WSM_SYN_V1_DEMO_run-000000000001", status: "failed" }
+    ] as const;
+    for (const run of adversarialRuns) {
+      const adversarial = createLiveMonitoringProvider({
+        fetchImpl: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify({ ...payload, recentRuns: [run] }), { status: 200 })),
+        timeoutMs: 1000
+      });
+      await expect(adversarial.getSyntheticJourneys?.()).rejects.toThrow("Synthetic journey API returned a malformed response");
+    }
+  });
+
   it("throws an explicit error for an unsupported environment", async () => {
     const provider = createFixtureMonitoringProvider();
 

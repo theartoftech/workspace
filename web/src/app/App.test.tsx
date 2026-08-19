@@ -72,9 +72,33 @@ describe("enterprise application shell", () => {
 
     expect(await screen.findByRole("heading", { name: "Fleet overview" })).toBeInTheDocument();
     expect(screen.getByText("Fixture data")).toBeInTheDocument();
-    for (const route of ["Overview", "Deployments", "Infrastructure", "Performance", "Incidents", "Logs", "Settings"]) {
+    for (const route of ["Overview", "Deployments", "Infrastructure", "Performance", "Incidents", "Logs", "Journeys", "Settings"]) {
       expect(screen.getByRole("link", { name: route })).toBeInTheDocument();
     }
+  });
+
+  it("shows disabled journey definitions and no fabricated evidence", async () => {
+    renderApp("/journeys");
+
+    expect(await screen.findByRole("heading", { name: "Synthetic journeys" })).toBeInTheDocument();
+    expect(await screen.findByText("Runner disabled")).toBeInTheDocument();
+    expect(screen.getByText("OAuth and CPQ authenticated read")).toBeInTheDocument();
+    expect(screen.getByText("CPQ synthetic record lifecycle")).toBeInTheDocument();
+    expect(screen.getByText("Mailpit delivery confirmation")).toBeInTheDocument();
+    expect(screen.getByText("ERPNext read-only verification")).toBeInTheDocument();
+    expect(screen.getByText("No journey runs have been recorded.")).toBeInTheDocument();
+    expect(screen.queryByText(/secret|credential|Bearer/iu)).not.toBeInTheDocument();
+  });
+
+  it("does not render a provider failure cause on the journey route", async () => {
+    const provider: MonitoringProvider = {
+      ...fixtureProvider,
+      getSyntheticJourneys: () => Promise.reject(new Error("Authorization: Bearer private-value"))
+    };
+    render(<MemoryRouter initialEntries={["/journeys"]}><App provider={provider} /></MemoryRouter>);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Synthetic journey evidence is unavailable.");
+    expect(screen.queryByText(/private-value|Bearer/iu)).not.toBeInTheDocument();
   });
 
   it("navigates between primary routes without a backend", async () => {

@@ -10,6 +10,7 @@ import { LogRequestError, type LogReader } from "./logs";
 import { PerformanceRequestError } from "./prometheus";
 import type { TopologyReader } from "./topology";
 import { AuthenticationError, type AuthenticatedSession, type LogoutResult } from "./auth";
+import type { SyntheticJourneyReader } from "./synthetic";
 
 export interface InventoryReader {
   getInventory(environment: string): Promise<InventorySnapshot>;
@@ -195,7 +196,7 @@ async function handleIncidentRequest(request: Request, operations: IncidentOpera
   }
 }
 
-export async function handleInventoryRequest(request: Request, reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: IncidentOperations, logReader?: LogReader): Promise<Response> {
+export async function handleInventoryRequest(request: Request, reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: IncidentOperations, logReader?: LogReader, syntheticJourneyReader?: SyntheticJourneyReader): Promise<Response> {
   const headOnly = request.method === "HEAD";
   const url = new URL(request.url);
   const incidentResponse = await handleIncidentRequest(request, incidentOperations, url, headOnly);
@@ -205,6 +206,16 @@ export async function handleInventoryRequest(request: Request, reader: Inventory
   }
 
   if (url.pathname === "/healthz") return jsonResponse(200, { status: "healthy" }, headOnly);
+
+  if (url.pathname === "/api/v1/journeys") {
+    if (syntheticJourneyReader === undefined) return jsonResponse(503, errorBody("synthetic_journeys_unavailable", "Synthetic journey evidence is not configured."), headOnly);
+    if ([...url.searchParams.keys()].length > 0) return jsonResponse(400, errorBody("invalid_parameter", "Synthetic journey evidence does not accept query parameters."), headOnly);
+    try {
+      return jsonResponse(200, await syntheticJourneyReader.getSyntheticJourneys(), headOnly);
+    } catch {
+      return jsonResponse(500, errorBody("synthetic_journeys_unavailable", "Synthetic journey evidence could not be assembled."), headOnly);
+    }
+  }
 
   if (url.pathname === "/api/v1/performance") {
     if (performanceReader === undefined) return jsonResponse(503, errorBody("performance_unavailable", "Performance telemetry is not configured."), headOnly);
@@ -327,7 +338,8 @@ export async function handleWorkspaceRequest(
   performanceReader?: PerformanceReader,
   topologyReader?: TopologyReader,
   incidentOperations?: AuthenticatedIncidentOperations,
-  logReader?: LogReader
+  logReader?: LogReader,
+  syntheticJourneyReader?: SyntheticJourneyReader
 ): Promise<Response> {
   const url = new URL(request.url);
   const headOnly = request.method === "HEAD";
@@ -402,10 +414,10 @@ export async function handleWorkspaceRequest(
     declare: (command) => incidentOperations.declare(command, session.user),
     transition: (id, command) => incidentOperations.transition(id, command, session.user)
   };
-  return handleInventoryRequest(request, reader, performanceReader, topologyReader, boundIncidentOperations, logReader);
+  return handleInventoryRequest(request, reader, performanceReader, topologyReader, boundIncidentOperations, logReader, syntheticJourneyReader);
 }
 
-export function createInventoryHttpServer(authentication: WorkspaceAuthentication, reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: AuthenticatedIncidentOperations, logReader?: LogReader): Server {
+export function createInventoryHttpServer(authentication: WorkspaceAuthentication, reader: InventoryReader, performanceReader?: PerformanceReader, topologyReader?: TopologyReader, incidentOperations?: AuthenticatedIncidentOperations, logReader?: LogReader, syntheticJourneyReader?: SyntheticJourneyReader): Server {
   return createServer((incoming, outgoing) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -431,7 +443,7 @@ export function createInventoryHttpServer(authentication: WorkspaceAuthenticatio
       });
       const responsePromise = oversized
         ? Promise.resolve(jsonResponse(413, errorBody("incident_command_too_large", "Incident command exceeds the 16384-byte limit."), false))
-        : handleWorkspaceRequest(request, authentication, reader, performanceReader, topologyReader, incidentOperations, logReader);
+        : handleWorkspaceRequest(request, authentication, reader, performanceReader, topologyReader, incidentOperations, logReader, syntheticJourneyReader);
       void responsePromise.then(async (response) => {
         outgoing.statusCode = response.status;
         response.headers.forEach((value, key) => {

@@ -11,7 +11,7 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | Service catalog | Strict JSON contract for CPQ demo/test, OAuth, Mailpit, ERPNet, and the public portfolio |
 | Primary lab monitoring | Docker Compose with the enterprise portal, read-only inventory API, Prometheus, Grafana, Blackbox Exporter, node-exporter, cAdvisor, and Gatus |
 | Future cloud monitoring | `kube-prometheus-stack` Helm chart with Prometheus, Grafana, Alertmanager, and Kubernetes metrics |
-| Synthetic probe support | Prometheus Blackbox Exporter plus dedicated Gatus nodes |
+| Synthetic probe support | Prometheus Blackbox Exporter, dedicated Gatus nodes, and a disabled-by-default Sprint 8 journey evidence foundation |
 | Direct application metrics | CPQ demo `/api/actuator/prometheus` through one `ServiceMonitor` |
 | Portfolio request metrics | Private Nginx exporter sidecar with selected-window request totals and request rate |
 | Internal reachability | CPQ demo/test, OAuth demo/test, Mailpit, and ERPNet from the CPQ server |
@@ -22,7 +22,7 @@ Development is organized as reviewable increments in the [detailed sprint plan](
 | PostgreSQL observability | Deployed private namespace-local exporters, least-privilege roles, allowlisted Prometheus evidence, bounded database panels, and alert rules for CPQ Demo and CPQ Test |
 | Alert delivery | Explicitly unconfigured until notification destinations and credential handling are selected |
 
-Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Sprint 6 adds direct, ephemeral Kubernetes pod logs rather than a durable aggregated log store. The Sprint 7 candidate protects application pages, APIs, and proxied tools by cryptographically validating the existing Cloudflare Access application assertion and derives every incident actor from an exact host-provisioned role mapping. CPQ Demo, CPQ Test, and their private Keycloak instances remain independent. Settings remains a preview. Notification delivery, durable log aggregation/retention, safe transaction journeys, and additional application scrapes remain later-sprint work.
+Overview, deployments, service detail, infrastructure topology, and incident evaluation use live inventory. Performance uses live Prometheus range queries. Incidents persist acknowledgement, declaration, silence, resolution, evidence, runbooks, and audit history in a server-side SQLite database. Sprint 6 adds direct, ephemeral Kubernetes pod logs rather than a durable aggregated log store. The Sprint 7 candidate protects application pages, APIs, and proxied tools by cryptographically validating the existing Cloudflare Access application assertion and derives every incident actor from an exact host-provisioned role mapping. CPQ Demo, CPQ Test, and their private Keycloak instances remain independent. Sprint 8 now has versioned disabled journey definitions, execution/cleanup/replay policy, a read-only evidence API, and a `/journeys` view; live identities, bindings, schedules, persistence, and mutations remain gated on explicit approval. Settings remains a preview. Notification delivery, durable log aggregation/retention, active safe transaction journeys, and additional application scrapes remain later-sprint work.
 
 ## Repository layout
 
@@ -44,6 +44,8 @@ Overview, deployments, service detail, infrastructure topology, and incident eva
 - `documentation/sprint-7-human-test-script.md` — pending public-origin Viewer/Operator/Administrator acceptance and privacy-safe evidence record.
 - `documentation/adr/0008-postgresql-observability.md` — private least-privilege PostgreSQL metrics, privacy boundaries, failure behavior, and deployment decisions.
 - `documentation/sprint-7.1-human-test-script.md` — accepted deployment and human-test record for CPQ Demo and CPQ Test database evidence.
+- `documentation/sprint-8-threat-model.md` — trust boundaries, invariants, failure taxonomy, severity, and activation blockers for safe journeys.
+- `documentation/adr/0009-safe-synthetic-journey-foundation.md` — proposed architecture, implemented foundation, measurable criteria, and test-first activation sequence.
 - `deployment/ENVIRONMENTS.md` — target topology, secret preparation, and operator workflow.
 - `probes/internal` — Gatus node intended to run inside the lab network.
 - `probes/external` — Gatus node intended to run on an independent public host.

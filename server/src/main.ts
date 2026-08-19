@@ -14,6 +14,7 @@ import { PrometheusPerformanceReader } from "./prometheus";
 import { CloudflareAccessJwtVerifier } from "./cloudflare-access";
 import { UnavailableSourceCollector, type SourceCollector } from "./source";
 import { KubernetesTopologyReader, UnavailableTopologyReader, type TopologyReader } from "./topology";
+import { DisabledSyntheticJourneyService } from "./synthetic";
 import runtimePackage from "../package.json";
 
 if (runtimePackage.type !== "commonjs") throw new Error("Inventory API runtime must use CommonJS modules");
@@ -157,7 +158,8 @@ async function run(): Promise<void> {
     }),
     await topologyReader(config, catalog, client),
     incidentService,
-    await logReader(config, catalog, client)
+    await logReader(config, catalog, client),
+    new DisabledSyntheticJourneyService()
   );
   server.listen(config.port, "0.0.0.0", () => {
     process.stdout.write(`Workspace Monitor operations API listening on port ${config.port}\n`);

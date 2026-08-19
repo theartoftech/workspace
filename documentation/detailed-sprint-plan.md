@@ -37,8 +37,8 @@
 | 6 | Logs and event correlation | Complete, deployed, and user-verified | Move from a failed service to relevant logs and Kubernetes events |
 | 7 | Enterprise identity and access | Deployed and automatically verified; human acceptance in progress | Validate Cloudflare Access identity and verify role-scoped actions and audit records |
 | 7.1 | PostgreSQL observability | Complete, deployed, and user-verified | Diagnose database availability, saturation, contention, and growth without exposing PostgreSQL publicly |
-| 8 | Safe synthetic journeys | Planned | Run non-destructive CPQ/OAuth/Mailpit/ERPNet journeys and see step diagnostics |
-| 9 | Cloud-ready operations | Planned | Install, upgrade, back up, restore, and roll back in an isolated target |
+| 8 | Safe synthetic journeys | Foundation deployed; live activation explicitly deferred | Keep the disabled foundation isolated while separately tracking live identities, adapters, persistence, schedules, and acceptance |
+| 9 | Cloud-ready operations | In progress; decision and architecture phase | Install, upgrade, back up, restore, and roll back in an isolated target |
 
 ## Sprint 0: Foundation and delivery guardrails
 
@@ -509,6 +509,20 @@ See [ADR 0008](adr/0008-postgresql-observability.md), the [Sprint 7.1 operator r
 
 ## Sprint 8: Safe synthetic journeys
 
+Status: in progress. The versioned disabled-by-default execution policy, cleanup/replay invariants, read-only evidence API, and `/journeys` view are implemented. Live identities, endpoint bindings, persistence, schedules, and application mutations remain blocked on the decisions in [ADR 0009](adr/0009-safe-synthetic-journey-foundation.md) and the [Sprint 8 threat model](sprint-8-threat-model.md).
+
+Review-gate decision recorded 2026-08-18: the remaining live-activation work is explicitly deferred from Sprint 9. Sprint 8 remains open and incomplete, all four journeys remain independently disabled, and Sprint 9 must not create journey identities, credentials, provider adapters, persistence, schedules, or live mutations.
+
+Deferred Sprint 8 scope remains tracked as:
+
+- approved dedicated identities and authentication contracts;
+- environment-bound CPQ, Mailpit, ERPNext, and OAuth adapters;
+- persistent execution claims, restart recovery, evidence retention, and orphan handling;
+- scheduler, cadence, concurrency, retry, alerting, and any manual-run authorization; and
+- live activation plus separate automated and human acceptance.
+
+Re-entering this work requires its own decisions, test-first implementation, deployment authorization, and acceptance record. The deferral satisfies the preceding-sprint review gate for starting Sprint 9 but does not mark Sprint 8 complete.
+
 ### Objective
 
 Monitor user-relevant behavior without creating unsafe or accumulating test data.
@@ -533,6 +547,20 @@ Monitor user-relevant behavior without creating unsafe or accumulating test data
 
 ## Sprint 9: Cloud-ready operations
 
+Status: in progress at the decision and architecture phase. The Sprint 8 review gate was satisfied by the explicit dated deferral above; Sprint 8 remains open. No cloud, Kubernetes, secret, backup, restore, DNS/TLS, CI-credential, or persistent-data mutation is authorized. See the [Sprint 9 discovery and decision record](sprint-9-cloud-operations-plan.md) and [cloud-operations threat model](sprint-9-threat-model.md).
+
+Accepted network decision as of 2026-08-18: CPQ Demo and Test PostgreSQL must both be permanently cluster-only. Laptop investigation uses an on-demand encrypted tunnel for DBVisualizer; a future cloud DB Manager must use in-cluster or approved private-network access. The live Demo `LoadBalancer` remediation is tracked as a separate test-first implementation step and has not yet been applied.
+
+Accepted local-validation decision as of 2026-08-19: the first isolated target is a disposable `kind` cluster backed by a dedicated Lima container runtime. All heavyweight VM, container, cluster, volume, and generated test-data storage must live in a grow-on-demand APFS disk image with a 200 GiB maximum, stored on the external T7 SSD; the existing exFAT T7 volume must not be reformatted. Implementation repeats the test, diagnose, fix, and full-retest loop until every approved gate passes. Before Test/Demo promotion, the disposable cluster, runtime, virtual disks, volumes, networks, temporary credentials, and generated data are deleted, while only versioned source/artifacts and redacted certification evidence are retained.
+
+Accepted cloud, cost, and coexistence decision as of 2026-08-19: AWS is the future managed-cloud certification target, but the EKS certification environment is deferred to the Sprint 9 future-work bucket. The current AWS out-of-pocket ceiling is absolute $0, and Sprint 9 creates no AWS account or billable AWS resource. The AWS path remains additive and independently deployable; Docker Compose is the primary lab profile and must operate normally when AWS is unavailable, unconfigured, unauthenticated, or fully torn down. Sprint 9 must not make lab startup, deployment, monitoring, identity, storage, rollback, or recovery depend on AWS, must not automatically copy lab data into AWS, and must not replace the lab profile without a later explicit decision.
+
+Accepted Helm ownership decision as of 2026-08-19: use separate release boundaries. The `workspace-monitor` application chart owns the portal, API, approved application persistence, application Services, service accounts/RBAC, NetworkPolicies, Pod Security settings, and approved portal Ingress. Prometheus, Grafana, Alertmanager, Blackbox, Gatus, exporters, and monitored applications remain outside application upgrade and rollback, with an optional observability composition chart providing independently managed integration.
+
+Accepted supporting-release decision as of 2026-08-19: Gatus, the Demo PostgreSQL exporter, and the Test PostgreSQL exporter are independently managed Helm releases rather than embedded dependencies of the application or core observability release. A versioned installation workflow coordinates them without merging credentials, persistent data, health gates, Helm revision histories, or rollback boundaries.
+
+Accepted artifact-registry decision as of 2026-08-19: iterative local validation uses an ephemeral registry backed by the T7 validation environment, while approved Workspace Monitor images and Helm OCI packages are published publicly through GHCR. Published artifacts must contain no credentials, environment configuration, or lab data and must be selected by immutable digest rather than mutable deployment tags. The lab does not depend on AWS ECR.
+
 ### Objective
 
 Turn the reviewed product into a reproducible, supportable deployment for the lab and future cloud environments.
@@ -544,7 +572,7 @@ Turn the reviewed product into a reproducible, supportable deployment for the la
 - CI build, scan, package, and promotion workflow.
 - Database/volume backup and restore procedures.
 - Upgrade, rollback, disaster-recovery, and version-compatibility runbooks.
-- Isolated cloud validation environment and cost envelope.
+- Local isolated Kubernetes validation and a versioned future AWS/EKS certification plan with cost and authorization gates.
 
 ### Acceptance criteria
 
@@ -554,6 +582,12 @@ Turn the reviewed product into a reproducible, supportable deployment for the la
 - Backup restoration is exercised, timed, and documented.
 - Secrets remain outside Git, images, rendered manifests, and CI logs.
 - Security, availability, observability, and cost review findings are resolved or explicitly accepted.
+- Docker Compose lab plan, preflight, deployment, verification, rollback, and persistent-data behavior remain supported and pass regression testing without AWS credentials or connectivity.
+- The current sprint completes without AWS credentials, connectivity, accounts, or resources, and the lab portal and all existing monitoring evidence remain available and unchanged.
+
+### Deferred future work: AWS EKS certification
+
+Actual EKS provisioning and certification are not Sprint 9 completion requirements. Re-entry requires the user's explicit authorization, a current cost estimate covered by verified credits or a newly approved spending ceiling, exact account/region/ownership and teardown decisions, and accepted registry, CI, secret, ingress/TLS, network, storage, backup/restore, and data-use contracts. The future exercise must be ephemeral, repeat the test/fix/full-retest loop to green, delete all disposable AWS resources, verify no unintended billable resources remain, and prove the Docker Compose lab stayed independent and healthy.
 
 ## Cross-sprint definition of done
 
